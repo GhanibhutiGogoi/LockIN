@@ -1,0 +1,91 @@
+{
+  "test_type": "actual NVIDIA + actual local E5 + simulated gaze/media + temporary SQLite",
+  "camera_used": false,
+  "user_screen_used": false,
+  "real_bank_modified": false,
+  "checks": [
+    {
+      "check": "live_vision_study",
+      "pass": true,
+      "seconds": 1.14,
+      "result": {
+        "kind": "study",
+        "task_related": true,
+        "confidence": 1.0,
+        "context": "Arithmetic mean formula and example"
+      }
+    },
+    {
+      "check": "live_vision_entertainment",
+      "pass": true,
+      "seconds": 1.5,
+      "result": {
+        "kind": "entertainment",
+        "task_related": false,
+        "confidence": 0.98,
+        "context": "social feed with funny cat videos and dance challenges"
+      }
+    },
+    {
+      "check": "live_vision_related_video",
+      "pass": true,
+      "seconds": 1.51,
+      "result": {
+        "kind": "study",
+        "task_related": true,
+        "confidence": 0.98,
+        "context": "Arithmetic mean formula and example"
+      }
+    },
+    {
+      "check": "related_learning_video_does_not_trigger",
+      "pass": true
+    },
+    {
+      "check": "invalid_gaze_does_not_trigger",
+      "pass": true
+    },
+    {
+      "check": "joint_gate_triggers_after_sustained_entertainment",
+      "pass": true
+    },
+    {
+      "check": "video_progress_and_quiz_gate_simulated_events",
+      "pass": true
+    },
+    {
+      "check": "recovery_window_and_synthetic_source_exclusion",
+      "pass": true,
+      "summary": {
+        "window_ms": 120000,
+        "observation_ms": 120000.0,
+        "valid_ms": 120000.0,
+        "on_task_ms": 120000.0,
+        "off_task_ms": 0,
+        "unknown_ms": 0,
+        "coverage": 1.0,
+        "on_task_share": 1.0,
+        "recovered_after_ms": 4000.0,
+        "relapse_after_ms": null,
+        "eligible": true,
+        "video_on_screen_share": null
+      }
+    },
+    {
+      "check": "next_trigger_retrieves_updated_memory_with_actual_e5",
+      "pass": true
+    },
+    {
+      "check": "user_bank_isolation",
+      "pass": true
+    },
+    {
+      "check": "false_alarm_retracts_inferred_memory",
+      "pass": true
+    },
+    {
+      "check": "abort_is_not_recovery_success",
+      "pass": true
+    }
+  ]
+}
