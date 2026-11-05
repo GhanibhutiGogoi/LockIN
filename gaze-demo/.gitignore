@@ -1,0 +1,14 @@
+node_modules
+dist/
+public/gaze-worker.js
+public/gaze-worker.js.map
+public/mediapipe/
+*.log
+public/.qa/
+.venv
+backend/data/
+__pycache__/
+.pytest_cache/
+.models
+.stress-data
+backend/artifacts/

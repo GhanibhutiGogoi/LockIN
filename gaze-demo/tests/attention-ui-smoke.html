@@ -1,0 +1,48 @@
+<!doctype html><html lang="zh-CN"><head><base href="/"><meta charset="utf-8"><title>LockIN UI persistence regressions</title><link rel="stylesheet" href="/src/style.css"></head><body style="padding:20px">
+<h1>UI 与持久化回归检查</h1><p>独立测试数据库，不访问摄像头。检查真实本地视频、答题门控、存储失败缓存和用户切换锁。</p><button id="run-ui">运行 UI 检查</button><pre id="ui-log">等待运行</pre>
+<section id="study-app"></section><section class="reading-stage" hidden><article></article></section><section id="study-history"></section>
+<script type="module">
+import { StudyStore } from '/src/storage.ts';
+import { StudyUI } from '/src/study-ui.ts';
+const log=s=>document.querySelector('#ui-log').textContent+='\n'+s;
+const assert=(v,s)=>{if(!v)throw new Error(s);log('PASS: '+s);};
+const wait=async(fn,timeout=5000)=>{const end=performance.now()+timeout;while(!fn()){if(performance.now()>end)throw new Error('等待超时');await new Promise(r=>setTimeout(r,50))}};
+const change=(id,value)=>{const e=document.getElementById(id);e.value=value;e.dispatchEvent(new Event('change',{bubbles:true}))};
+document.querySelector('#run-ui').onclick=async()=>{
+ document.querySelector('#run-ui').disabled=true;document.querySelector('#ui-log').textContent='运行中…';
+ const name='lockin-ui-test-'+crypto.randomUUID(), db=new StudyStore(name);
+ let exported=null;
+ // Capture the real export Blob; keep the OS download side effect out of this test.
+ const createURL=URL.createObjectURL,anchorClick=HTMLAnchorElement.prototype.click;
+ URL.createObjectURL=function(blob){if(blob.type==='application/json')blob.text().then(s=>exported=JSON.parse(s));return createURL.call(this,blob)};
+ HTMLAnchorElement.prototype.click=function(){if(!this.download)return anchorClick.call(this)};
+ let fail=false,releaseB;const gate=new Promise(resolve=>releaseB=resolve);
+ const store={profiles:()=>db.profiles(),saveProfile:p=>db.saveProfile(p),episodes:async id=>{if(id==='b')await gate;return db.episodes(id)},sessions:async id=>{if(id==='b')await gate;return db.sessions(id)},saveEpisode:async e=>{if(fail)throw new Error('simulated quota');await db.saveEpisode(e)},saveSession:async s=>{if(fail)throw new Error('simulated quota');await db.saveSession(s)}};
+ try{
+  for(const [id,name] of [['a','测试 A'],['b','测试 B']])await db.saveProfile({id,name,createdAt:new Date().toISOString(),preferences:{style:'plain',pace:'normal',language:'zh',maxSeconds:40}});
+  new StudyUI({store,stopTracking:()=>{}});
+  await wait(()=>!document.querySelector('#begin-study').disabled);
+  document.querySelector('#use-sample').click();document.querySelector('#begin-study').click();document.querySelector('#test-rescue').click();
+  await wait(()=>!document.querySelector('#rescue-overlay').hidden);
+  assert(document.querySelector('#rescue-quiz').hidden,'播放期间不提前显示答题返回入口');
+  await wait(()=>!document.querySelector('#rescue-quiz').hidden,25000);
+  document.querySelector('#submit-quiz').click();assert(!document.querySelector('#rescue-overlay').hidden&&document.querySelector('#quiz-error').textContent,'未选择答案时不能返回学习');
+  document.querySelector('input[name=rescue-answer][value="1"]').checked=true;document.querySelector('#submit-quiz').click();
+  assert(document.querySelector('#rescue-overlay').hidden&&document.querySelector('#session-phase').textContent.includes('恢复观察'),'实际答题后返回恢复观察阶段');
+  fail=true;document.querySelector('#end-study').click();
+  await wait(()=>document.querySelector('#study-alert').textContent.includes('未能写入'));
+  assert(document.querySelector('#episode-history').textContent.includes('session-ended'),'保存失败时保留当前未完成记录');
+  change('profile-select','b');
+  assert(document.querySelector('#export-memory').disabled&&document.querySelector('#begin-study').disabled,'切换用户加载期间锁住导出与开始会话');
+  assert(document.querySelector('#memory-count').textContent.includes('测试 A'),'加载完成前不混合新身份与旧记录');
+  releaseB();await wait(()=>document.querySelector('#memory-count').textContent.includes('测试 B'));
+  assert(!document.querySelector('#episode-history').textContent.includes('session-ended'),'用户 B 不展示用户 A 的记录');
+  change('profile-select','a');await wait(()=>document.querySelector('#memory-count').textContent.includes('测试 A'));
+  assert(document.querySelector('#episode-history').textContent.includes('session-ended'),'切回用户 A 后恢复未能落盘的完整内存记录');
+  document.querySelector('#export-memory').click();await wait(()=>exported!==null);
+  assert(exported.profile.id==='a'&&exported.episodes.length===1&&exported.episodes.every(e=>e.profileId==='a')&&exported.sessions.every(s=>s.profileId==='a'),'实际导出按钮生成同一用户的完整缓存数据');
+  log('ALL UI PERSISTENCE CHECKS PASSED');
+ }catch(e){log('FAIL: '+(e.stack||e))}
+ finally{releaseB();URL.createObjectURL=createURL;HTMLAnchorElement.prototype.click=anchorClick;await db.close();indexedDB.deleteDatabase(name)}
+};
+</script></body></html>
