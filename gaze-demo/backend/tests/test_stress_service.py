@@ -51,6 +51,14 @@ def test_feedback_is_user_scoped_tentative_retractable_and_replay_isolated(env):
     assert not [m for m in service.bank(a)['memories'] if m['active']]
 
 
+def test_untried_dog_is_selected_after_unhelpful_cat_feedback(env):
+    service,a,b=env;s=service.start(a,StartStress(mode='replay'));e=trigger(service,a,s['id'])['event']
+    service.action(a,e['id'],EventAction(kind='shown',t_ms=10000))
+    service.feedback(a,e['id'],Feedback(helpful=False));service.end(a,s['id'])
+    next_session=service.start(a,StartStress(mode='replay'))
+    assert trigger(service,a,next_session['id'])['event']['animation']=='dog_stretch'
+
+
 def test_competing_learning_video_suppresses_relief(env):
     service,a,b=env
     with service.store.transaction(a) as tx:tx.put('session','attention',{'id':'attention','phase':'quiz'})
@@ -140,4 +148,5 @@ def test_live_self_report_is_bound_to_fresh_window_and_never_imputed_from_a_smil
     assert ambiguous['label'] is None
     assert len(service.get(a,s['id'])['labelled_windows'])==1
     clock[0]+=timedelta(seconds=5)
+    assert service.get(a,s['id'])['last_prediction']['reason']=='camera_input_expired'
     with pytest.raises(ValueError):service.label(a,s['id'],SelfReport(rating=8))

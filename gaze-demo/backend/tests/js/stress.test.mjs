@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {orderedScores,describePrediction} from '../../static/stress-contract.js';
+import * as contract from '../../static/stress-contract.js';
+const {orderedScores,describePrediction}=contract;
 import {petMarkup} from '../../static/stress-pets.js';
 
 test('face coefficients are ordered by the explicit model contract not returned array order',()=>{
@@ -22,4 +23,28 @@ test('synthetic replay and missing model never masquerade as measured pressure',
 test('only bundled known pet markup is rendered, never arbitrary HTML from an event',()=>{
   assert.match(petMarkup('cat_yawn'),/<svg/);assert.match(petMarkup('dog_stretch'),/<svg/);
   assert.equal(petMarkup('<img src=x onerror=alert(1)>'),'');
+});
+
+test('restoring or losing camera input cannot display a historical high state',()=>{
+  assert.equal(typeof contract.currentPrediction,'function');
+  const high={state:'possible_tension',score:.9};
+  assert.equal(contract.currentPrediction(high,{mode:'live',cameraLive:false,lastValidAt:1000,now:1100}).state,'unknown');
+  assert.equal(contract.currentPrediction(high,{mode:'live',cameraLive:true,lastValidAt:1000,now:2300}).state,'unknown');
+  assert.equal(contract.currentPrediction(high,{mode:'live',cameraLive:true,lastValidAt:1000,now:1100}).state,'possible_tension');
+  assert.equal(contract.currentPrediction(high,{mode:'replay'}).state,'possible_tension');
+});
+
+test('animation feedback preserves optional paired retrospective ratings',()=>{
+  assert.equal(typeof contract.feedbackBody,'function');
+  assert.deepEqual(contract.feedbackBody(true,'',''),{helpful:true});
+  assert.deepEqual(contract.feedbackBody(true,'7','3'),{helpful:true,before:7,after:3});
+  assert.throws(()=>contract.feedbackBody(true,'7',''));
+  assert.throws(()=>contract.feedbackBody(true,'12','3'));
+});
+
+test('competing intervention or lost status connection hides a visible animal',()=>{
+  assert.equal(typeof contract.suppressRelief,'function');
+  assert.equal(contract.suppressRelief({learning_intervention_active:true},true),true);
+  assert.equal(contract.suppressRelief({learning_intervention_active:false},false),true);
+  assert.equal(contract.suppressRelief({learning_intervention_active:false},true),false);
 });

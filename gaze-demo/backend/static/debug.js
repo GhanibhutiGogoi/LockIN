@@ -8,6 +8,8 @@ let identity=null,session=null,episode=null,clockStart=0,replayTime=0,replaying=
 let mediaQueue=Promise.resolve(),lastProgress=-1,renderedEpisode=null,closing=false,sessionGeneration=0;
 const localFiles=new Map();
 const captureLease=new CaptureLease();
+const learningBus=typeof BroadcastChannel==='function'?new BroadcastChannel('lockin-learning-interventions'):null;
+let announcedPhase=null;
 const captureLoop=new CaptureLoop(capture);
 const gaze=new GazeCapture($('camera'),text=>show('gaze-status',text));
 const video=$('intervention');
@@ -39,6 +41,10 @@ async function selectUser(id){
   }else notice('已切换用户，各用户记忆相互独立。');
 }
 function render(){
+  if(identity&&session){
+    const key=identity.user.id+':'+session.phase;
+    if(key!==announcedPhase){announcedPhase=key;learningBus?.postMessage({user_id:identity.user.id,active:['video','quiz'].includes(session.phase)});}
+  }
   show('session',session?`${session.mode==='replay'?'合成回放':'真实输入'} · ${session.id}`:'尚未开始');show('phase',session?.phase||'未开始');updateLocks();
   if(session)show('gate',session.decisions.at(-1)||'等待有效联合输入。');
   if(!episode)return;
@@ -150,5 +156,6 @@ $('share').onclick=safe(async()=>{
 });
 function stopSharing(){captureLoop.stop();captureLease.stop();sharing=null;$('shared').srcObject=null;previousPixels=null;}
 function stopInputs(){stopSharing();gaze.stop();}
-window.addEventListener('beforeunload',()=>{stopInputs();for(const url of localFiles.values())URL.revokeObjectURL(url);});
-refreshUsers();updateLocks();if(users.length)await safe(()=>selectUser(users[0].user.id))();else show('provider','先创建本地用户，再读取模块状态。');
+window.addEventListener('beforeunload',()=>{learningBus?.close();stopInputs();for(const url of localFiles.values())URL.revokeObjectURL(url);});
+const requestedUser=new URL(location.href).searchParams.get('user');
+refreshUsers();updateLocks();if(users.length)await safe(()=>selectUser(users.find(u=>u.user.id===requestedUser)?.user.id||users[0].user.id))();else show('provider','先创建本地用户，再读取模块状态。');

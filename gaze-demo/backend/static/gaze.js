@@ -1,7 +1,7 @@
 /** Adapter for the existing frozen pretrained worker. Raw frames never leave browser. */
 import {orderedScores} from './stress-contract.js';
 export class GazeCapture {
-  constructor(video, status) { this.video=video;this.status=status;this.stream=null;this.worker=null;this.ready=false;this.busy=false;this.calibrated=false;this.latest=null;this.lastFrame=0;this.lastVideoTime=null;this.canvas=document.createElement('canvas');this.canvas.width=640;this.canvas.height=480;this.ctx=this.canvas.getContext('2d',{willReadFrequently:true});this.round=0; }
+  constructor(video, status) { this.video=video;this.status=status;this.stream=null;this.worker=null;this.ready=false;this.busy=false;this.calibrated=false;this.latest=null;this.lastFrame=0;this.lastFrameId=null;this.presentedFrame=null;this.frameCallback=null;this.hasFrameCallbacks=false;this.canvas=document.createElement('canvas');this.canvas.width=640;this.canvas.height=480;this.ctx=this.canvas.getContext('2d',{willReadFrequently:true});this.round=0; }
   cameraLive(){const track=this.stream?.getVideoTracks()[0];return !!track&&track.readyState==='live'&&!track.muted&&!this.video.paused&&!this.video.ended&&this.video.readyState>=2;}
   async start() {
     this.stop();const round=this.round;
@@ -9,6 +9,15 @@ export class GazeCapture {
     if(round!==this.round){stream.getTracks().forEach(t=>t.stop());return;}
     this.stream=stream;this.video.srcObject=stream;await this.video.play();
     if(round!==this.round){stream.getTracks().forEach(t=>t.stop());return;}
+    this.hasFrameCallbacks=typeof this.video.requestVideoFrameCallback==='function';
+    if(this.hasFrameCallbacks){
+      const presented=(_now,metadata)=>{
+        if(round!==this.round)return;
+        if(Number.isFinite(metadata.presentedFrames)&&metadata.presentedFrames>0)this.presentedFrame={id:metadata.presentedFrames,at:performance.now()};
+        this.frameCallback=this.video.requestVideoFrameCallback(presented);
+      };
+      this.frameCallback=this.video.requestVideoFrameCallback(presented);
+    }
     this.worker=new Worker('/tracker/gaze-worker.js');
     this.worker.onmessage=({data:d})=>{
       if(round!==this.round)return;
@@ -26,10 +35,11 @@ export class GazeCapture {
     this.worker.postMessage({type:'init',baseUrl:location.origin+'/tracker'});
     const loop=()=>{if(round!==this.round)return;const t=performance.now();
       if(!this.cameraLive()){this.latest=null;return;}
-      const frameTime=this.video.currentTime;
-      if(!this.ready||this.busy||t-this.lastFrame<100||!Number.isFinite(frameTime)||(this.lastVideoTime!==null&&frameTime<=this.lastVideoTime))return;
-      this.lastFrame=t;this.lastVideoTime=frameTime;this.busy=true;this.ctx.drawImage(this.video,0,0,640,480);const image=this.ctx.getImageData(0,0,640,480);
-      this.worker.postMessage({type:'frame',timestamp:t,width:640,height:480,buffer:image.data.buffer},[image.data.buffer]);};this.raf=setInterval(loop,100);
+      const count=this.hasFrameCallbacks?null:this.video.getVideoPlaybackQuality?.().totalVideoFrames;
+      const frame=this.hasFrameCallbacks?this.presentedFrame:(Number.isFinite(count)&&count>0?{id:count,at:t}:null);
+      if(!this.ready||this.busy||t-this.lastFrame<100||!frame||(this.lastFrameId!==null&&frame.id<=this.lastFrameId)||t-frame.at>=1200)return;
+      this.lastFrame=t;this.lastFrameId=frame.id;this.busy=true;this.ctx.drawImage(this.video,0,0,640,480);const image=this.ctx.getImageData(0,0,640,480);
+      this.worker.postMessage({type:'frame',timestamp:frame.at,width:640,height:480,buffer:image.data.buffer},[image.data.buffer]);};this.raf=setInterval(loop,100);
   }
   calibrate() {if(!this.ready)throw Error('请先启动摄像头并等待模型加载。');this.cancel();this.calibrated=false;this.validation=false;this.index=0;this.errors=[];this.worker.postMessage({type:'reset'});this.place();}
   place(){
@@ -59,5 +69,5 @@ export class GazeCapture {
     return {valid:values!==null,values,capturedAt:values?l.t:null};
   }
   cancel(){clearTimeout(this.timeout);this.point=null;this.worker?.postMessage({type:'cancelPoint'});const overlay=document.getElementById('calibration');if(overlay)overlay.hidden=true;}
-  stop(){this.round++;clearInterval(this.raf);this.cancel();this.stream?.getTracks().forEach(t=>t.stop());this.stream=null;this.video.srcObject=null;this.worker?.terminate();this.worker=null;this.ready=false;this.calibrated=false;this.latest=null;this.busy=false;this.lastFrame=0;this.lastVideoTime=null;}
+  stop(){this.round++;clearInterval(this.raf);if(this.frameCallback!==null)this.video.cancelVideoFrameCallback?.(this.frameCallback);this.frameCallback=null;this.presentedFrame=null;this.hasFrameCallbacks=false;this.cancel();this.stream?.getTracks().forEach(t=>t.stop());this.stream=null;this.video.srcObject=null;this.worker?.terminate();this.worker=null;this.ready=false;this.calibrated=false;this.latest=null;this.busy=false;this.lastFrame=0;this.lastFrameId=null;}
 }

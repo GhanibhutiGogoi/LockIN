@@ -3,7 +3,7 @@ import hashlib
 import json
 import math
 import random
-from .features import SCHEMA,EXTRACTOR,NAMES,WINDOW_MS
+from .features import SCHEMA,EXTRACTOR,NAMES,WINDOW_MS,MAX_GAP_MS,aggregate
 from .model import finite_vector
 
 
@@ -15,11 +15,22 @@ def validate_dataset(rows,manifest):
     if not rows:raise ValueError('no labelled training windows available')
     intervals={}
     for r in rows:
+        accepted_sources={'real_self_report','project_user_self_report'} if manifest['source_kind']=='real_self_report' else {'synthetic_test'}
+        if any(r.get(k)!=v for k,v in {'feature_schema':SCHEMA,'extractor':EXTRACTOR,'label_kind':'self_report'}.items()) or r.get('source_kind') not in accepted_sources:
+            raise ValueError('row provenance/extractor does not match dataset manifest')
         if not isinstance(r.get('subject'),str) or not r['subject'] or not isinstance(r.get('session'),str) or not r['session']:raise ValueError('subject and session identity required')
         if type(r.get('label')) is not int or r['label'] not in [0,1]:raise ValueError('explicit binary self-report label required; unknown is not negative')
         if not finite_vector(r.get('vector'),104) or any(not 0<=v<=1 for v in r['vector']):raise ValueError('incompatible feature vector')
         start,end=r.get('start_ms'),r.get('end_ms')
-        if not all(isinstance(v,(int,float)) and math.isfinite(v) for v in [start,end]) or start<0 or end-start!=WINDOW_MS:raise ValueError('label-aligned 20-second window required')
+        if not all(isinstance(v,(int,float)) and math.isfinite(v) for v in [start,end]) or start<0 or not math.isclose(end-start,WINDOW_MS,abs_tol=.00001):raise ValueError('label-aligned 20-second window required')
+        frames=r.get('frames')
+        if not isinstance(frames,list) or not 2<=len(frames)<=250:raise ValueError('bounded raw derived-score frames required to verify aggregation')
+        if any(not isinstance(f,dict) or not isinstance(f.get('t_ms'),(int,float)) or not start-MAX_GAP_MS<=f['t_ms']<=end or type(f.get('valid')) is not bool for f in frames):
+            raise ValueError('frame window or quality evidence mismatch')
+        window=aggregate(frames,end)
+        if window['vector'] is None or not isinstance(r.get('coverage'),(int,float)) or not math.isclose(r['coverage'],window['coverage'],abs_tol=1e-7) or not isinstance(r.get('valid_ms'),(int,float)) or not math.isclose(r['valid_ms'],window['valid_ms'],abs_tol=.0001):
+            raise ValueError('insufficient or false aggregation coverage')
+        if any(not math.isclose(v,w,abs_tol=1e-7) for v,w in zip(r['vector'],window['vector'])):raise ValueError('features do not match canonical causal aggregation')
         key=(r['subject'],r['session']);windows=intervals.setdefault(key,[])
         if any(start==s and end==e for s,e in windows):raise ValueError('duplicate training interval')
         windows.append((start,end))
@@ -66,22 +77,36 @@ def train(rows,manifest,seed=42):
         return {'macro_f1':float(f1_score(truth,pred,average='macro',labels=[0,1],zero_division=0)),
             'balanced_accuracy':float(balanced_accuracy_score(truth,pred)),
             'confusion_matrix':confusion_matrix(truth,pred,labels=[0,1]).tolist(),'n':len(truth)}
+    def runtime_metrics(estimator,features,truth):
+        scores=estimator.predict_proba(features)[:,1]
+        high=scores>=.75;low=scores<=.35
+        tp=int(np.sum(high&(truth==1)));tn=int(np.sum(low&(truth==0)))
+        positive=int(np.sum(truth==1));negative=int(np.sum(truth==0))
+        hp=tp/int(high.sum()) if high.any() else 0.;lp=tn/int(low.sum()) if low.any() else 0.
+        hr=tp/positive;lr=tn/negative
+        hf=2*hp*hr/(hp+hr) if hp+hr else 0.;lf=2*lp*lr/(lp+lr) if lp+lr else 0.
+        return {'coverage':float(np.mean(high|low)),'high_count':int(high.sum()),'low_count':int(low.sum()),
+            'unknown_count':int(np.sum(~(high|low))),'high_hits':tp,'low_hits':tn,'labelled_high_count':positive,
+            'labelled_low_count':negative,'balanced_accuracy_including_abstentions':(hr+lr)/2,
+            'macro_f1_including_abstentions':(hf+lf)/2}
     dummy=DummyClassifier(strategy='most_frequent').fit(scaled['train'],y['train'])
     baseline=metrics(y['validation'],dummy.predict(scaled['validation']))
     candidates={'logistic':LogisticRegression(C=1,class_weight='balanced',max_iter=1000,random_state=seed),
         'forest':RandomForestClassifier(n_estimators=64,max_depth=4,min_samples_leaf=3,class_weight='balanced',random_state=seed,n_jobs=1)}
-    validation={}
+    validation={};runtime_validation={}
     for name,estimator in candidates.items():
         estimator.fit(scaled['train'],y['train'])
         validation[name]=metrics(y['validation'],estimator.predict(scaled['validation']))
-    selected=max(candidates,key=lambda name:(validation[name]['macro_f1'],validation[name]['balanced_accuracy'],name=='logistic'))
+        runtime_validation[name]=runtime_metrics(estimator,scaled['validation'],y['validation'])
+    selected=max(candidates,key=lambda name:(runtime_validation[name]['macro_f1_including_abstentions'],runtime_validation[name]['balanced_accuracy_including_abstentions'],runtime_validation[name]['coverage'],name=='logistic'))
     # Selection is frozen above. Test labels never influence fitting or selection.
     chosen=candidates[selected]
     test_pred=chosen.predict(scaled['test']);test=metrics(y['test'],test_pred)
     source_real=manifest['source_kind']=='real_self_report'
-    eligible=bool(source_real and n>=12 and validation[selected]['balanced_accuracy']>=.60 and validation[selected]['macro_f1']>=baseline['macro_f1']+.05)
+    runtime=runtime_validation[selected]
+    eligible=bool(source_real and n>=12 and runtime['balanced_accuracy_including_abstentions']>=.60 and runtime['macro_f1_including_abstentions']>=baseline['macro_f1']+.05 and runtime['coverage']>=.50 and runtime['high_count']>0 and runtime['low_count']>0)
     artifact=export_estimator(chosen,scaler,manifest)
-    artifact.update(runtime_eligible=eligible,validation={'eligible':eligible,**validation[selected]})
+    artifact.update(runtime_eligible=eligible,validation={'eligible':eligible,**validation[selected],'runtime':runtime})
     artifact['model_id']=hashlib.sha256(json.dumps(artifact,sort_keys=True,allow_nan=False).encode()).hexdigest()[:16]
     per_subject={}
     for subject in groups['test']:
@@ -90,9 +115,11 @@ def train(rows,manifest,seed=42):
     report={'status':'trained_experimental' if source_real else 'synthetic_software_test_only',
         'source_kind':manifest['source_kind'],'seed':seed,'participant_count':n,'split_subjects':groups,
         'validation_dummy':baseline,'validation_candidates':validation,'selected_candidate':selected,
+        'validation_runtime_candidates':runtime_validation,'validation_runtime':runtime,
+        'held_out_test_runtime':runtime_metrics(chosen,scaled['test'],y['test']),
         'held_out_test':test,'test_dummy':metrics(y['test'],dummy.predict(scaled['test'])),
         'per_test_subject':per_subject,'runtime_eligible':eligible,
-        'gate_predeclared':{'min_participants':12,'validation_balanced_accuracy':.60,'macro_f1_above_dummy':.05},
+        'gate_predeclared':{'min_participants':12,'validation_runtime_balanced_accuracy':.60,'runtime_macro_f1_above_dummy':.05,'runtime_coverage':.50,'both_decision_types_required':True},
         'feature_schema':SCHEMA,'feature_coverage':'Input contains prevalidated 20s windows; no runtime coverage claim.',
         'project_user_validation':False,'causal_relief_effect_validation':False,
         'limitations':['Public-label benchmark only; not a diagnostic measure.','Runtime 0.75/0.35 thresholds are engineering defaults, not calibrated stress probabilities.']}

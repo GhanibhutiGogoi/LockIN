@@ -32,7 +32,17 @@ class StressService:
         return s
 
     def get(self,user,sid):
-        with self.store.transaction(user) as tx:return self.require(tx,'stress_session',sid)
+        with self.store.transaction(user) as tx:
+            s=self.require(tx,'stress_session',sid)
+            competing=any(v['phase'] in ['video','quiz'] for v in tx.list('session'))
+            s['learning_intervention_active']=competing
+            if s['mode']=='live':
+                elapsed=(datetime.now(timezone.utc)-datetime.fromisoformat(s['created_at'])).total_seconds()*1000
+                if s['last_t']<0 or elapsed-s['last_t']>2000 or s['phase']!='active':
+                    s['last_observed_prediction']=s['last_prediction']
+                    s['last_prediction']={'state':'unknown','score':None,'reason':'camera_input_expired','experimental':True}
+            if competing:s['last_prediction']={'state':'unknown','score':None,'reason':'learning_intervention_active','experimental':True}
+            return s
 
     def preferences(self,user,real=True):
         with self.store.transaction(user) as tx:return self._preferences(tx,'real' if real else 'replay_sandbox')
@@ -55,7 +65,12 @@ class StressService:
         if s['since'] is not None and t-s['since']>=10000 and t>=s['cooldown_until']:
             namespace='real' if s['mode']=='live' else 'replay_sandbox'
             memories=self._preferences(tx,namespace)
-            choice=max(memories,key=lambda m:(m['helpful_count']+1)/(m['count']+2))['animation'] if memories else ANIMATIONS[len(s['event_ids'])%2]
+            profiles={m['animation']:m for m in memories}
+            rotation=ANIMATIONS[len(s['event_ids'])%2]
+            def preference(animation):
+                m=profiles.get(animation,{'helpful_count':0,'count':0})
+                return ((m['helpful_count']+1)/(m['count']+2),animation==rotation)
+            choice=max(ANIMATIONS,key=preference)
             emitted=max(t,(datetime.now(timezone.utc)-datetime.fromisoformat(s['created_at'])).total_seconds()*1000) if s['mode']=='live' else t
             event={'id':uid(),'session_id':s['id'],'source':'derived_camera_features' if s['mode']=='live' else 'synthetic_replay',
                 'namespace':namespace,'trigger_at_ms':t,'emitted_at_ms':emitted,'animation':choice,'phase':'offered',
@@ -109,6 +124,8 @@ class StressService:
                 'label':label,'rating':request.rating,'label_rule':'0..3 low; 7..10 high; 4..6 unknown/excluded',
                 'vector':window['vector'],'feature_schema':SCHEMA,'extractor':EXTRACTOR,
                 'source_kind':'project_user_self_report','label_kind':'self_report',
+                'coverage':window['coverage'],'valid_ms':window['valid_ms'],
+                'frames':[r for r in s['window'] if r['t_ms']>=window['window_end_ms']-20000-MAX_GAP_MS],
                 'consent':'user explicitly submitted this retrospective 20-second self-report'}
             if row['start_ms']<0:raise ValueError('complete 20-second window required')
             rows=[r for r in s['labelled_windows'] if r['end_ms']!=row['end_ms']]

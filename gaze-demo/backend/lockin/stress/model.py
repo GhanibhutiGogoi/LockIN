@@ -1,19 +1,22 @@
 """Portable numeric inference only: never unpickle a downloaded model."""
 import json
 import math
+import struct
 from pathlib import Path
 from .features import SCHEMA,EXTRACTOR,NAMES,WINDOW_MS
 
 
 def finite_vector(values,n):
-    return isinstance(values,list) and len(values)==n and all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) for v in values)
+    try:return isinstance(values,list) and len(values)==n and all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) for v in values)
+    except (TypeError,ValueError,OverflowError):return False
 
 
 class StressModel:
     def __init__(self,artifact=None):
         self.artifact=artifact;self.reason='model_not_trained'
         if artifact is not None:
-            self.reason=None if self.compatible(artifact) else 'incompatible_model'
+            try:self.reason=None if self.compatible(artifact) else 'incompatible_model'
+            except (TypeError,ValueError,OverflowError,IndexError,KeyError,RecursionError):self.reason='incompatible_model'
 
     @classmethod
     def load(cls,path):
@@ -21,7 +24,7 @@ class StressModel:
             p=Path(path)
             if p.stat().st_size>2_000_000:raise ValueError('artifact too large')
             return cls(json.loads(p.read_text()))
-        except (OSError,ValueError,TypeError):
+        except (OSError,ValueError,TypeError,OverflowError,RecursionError):
             model=cls();model.reason='model_missing_or_invalid';return model
 
     @staticmethod
@@ -60,11 +63,20 @@ class StressModel:
         if self.reason:return {'state':'unknown','score':None,'reason':self.reason,'experimental':True}
         if not finite_vector(vector,104) or any(not 0<=v<=1 for v in vector):
             return {'state':'unknown','score':None,'reason':'invalid_features','experimental':True}
-        a=self.artifact;x=[(v-m)/s for v,m,s in zip(vector,a['mean'],a['scale'])]
+        a=self.artifact
+        try:x=[(v-m)/s for v,m,s in zip(vector,a['mean'],a['scale'])]
+        except (OverflowError,ValueError,ZeroDivisionError):return self.numeric_failure()
+        if not all(math.isfinite(v) for v in x):return self.numeric_failure()
         if a['kind']=='logistic':
-            z=max(-700,min(700,a['intercept']+sum(w*v for w,v in zip(a['coef'],x))))
+            try:z=a['intercept']+math.fsum(w*v for w,v in zip(a['coef'],x))
+            except (OverflowError,ValueError):return self.numeric_failure()
+            if not math.isfinite(z):return self.numeric_failure()
+            z=max(-700,min(700,z))
             score=1/(1+math.exp(-z))
         else:
+            try:x=[struct.unpack('f',struct.pack('f',v))[0] for v in x]
+            except (OverflowError,struct.error):return self.numeric_failure()
+            if not all(math.isfinite(v) for v in x):return self.numeric_failure()
             probabilities=[]
             for tree in a['trees']:
                 node=0
@@ -74,3 +86,6 @@ class StressModel:
             score=sum(probabilities)/len(probabilities)
         state='possible_tension' if score>=.75 else 'no_clear_tension' if score<=.35 else 'unknown'
         return {'state':state,'score':score,'reason':'experimental_classifier' if state!='unknown' else 'ambiguous_score','experimental':True}
+
+    @staticmethod
+    def numeric_failure():return {'state':'unknown','score':None,'reason':'nonfinite_model_math','experimental':True}

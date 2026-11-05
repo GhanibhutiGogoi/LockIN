@@ -39,7 +39,7 @@ async function camera(t){
   let now=1000,loop;const messages=[];
   const track={readyState:'live',muted:false,stop(){this.readyState='ended';}};
   const stream={getTracks:()=>[track],getVideoTracks:()=>[track]};
-  const video={readyState:4,currentTime:1,paused:false,ended:false,srcObject:null,play:async()=>{}};
+  const video={readyState:4,currentTime:1,presentedFrames:1,paused:false,ended:false,srcObject:null,play:async()=>{},getVideoPlaybackQuality(){return {totalVideoFrames:this.presentedFrames};}};
   const nodes={calibration:{hidden:true}};
   const globals={document:{createElement:()=>({getContext:()=>({drawImage(){},getImageData:()=>({data:new Uint8ClampedArray(4)})})}),getElementById:id=>nodes[id]},
     navigator:{mediaDevices:{getUserMedia:async()=>stream}},location:{origin:'http://localhost:8000'},innerWidth:1000,innerHeight:800,
@@ -83,7 +83,19 @@ test('a frozen webcam frame expires instead of being stamped as new gaze',async 
   c.tick(3000);c.tick(6000);
   assert.equal(c.gaze.sample().valid,false);
   assert.equal(c.messages.filter(m=>m.type==='frame').length,1);
-  c.video.currentTime=2;c.tick(6100);assert.equal(c.gaze.sample().valid,true);
+  c.video.currentTime=2;c.video.presentedFrames=2;c.tick(6100);assert.equal(c.gaze.sample().valid,true);
+});
+
+test('advancing playback clock without new presented frames cannot refresh gaze',async t=>{
+  const c=await camera(t);c.tick(1000);assert.equal(c.gaze.sample().valid,true);
+  c.video.currentTime=2;c.tick(2000);c.video.currentTime=3;c.tick(3000);
+  assert.equal(c.gaze.sample().valid,false);
+  assert.equal(c.messages.filter(m=>m.type==='frame').length,1);
+});
+
+test('unknown presented-frame freshness fails closed even with a running camera',async t=>{
+  const c=await camera(t);c.video.getVideoPlaybackQuality=undefined;c.tick(1000);
+  assert.equal(c.gaze.sample().valid,false);
 });
 
 for(const state of ['ended','muted','paused'])test(`gaze immediately becomes invalid when camera is ${state}`,async t=>{

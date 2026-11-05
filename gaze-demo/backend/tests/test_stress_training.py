@@ -11,8 +11,12 @@ def dataset():
     for person in range(15):
         for sample in range(8):
             label=sample%2
+            value=.15+.5*label+person*.001;start=sample*20000
             rows.append({'subject':f'p{person:02}','session':'unit','start_ms':sample*20000,
-                'end_ms':(sample+1)*20000,'label':label,'vector':[.15+.5*label+person*.001]*52+[.01]*52})
+                'end_ms':(sample+1)*20000,'label':label,'vector':[value]*52+[0.]*52,
+                'feature_schema':SCHEMA,'extractor':EXTRACTOR,'source_kind':'synthetic_test','label_kind':'self_report',
+                'coverage':1.,'valid_ms':20000,
+                'frames':[{'t_ms':start+i*500,'valid':True,'values':[value]*52} for i in range(41)]})
     manifest={'version':1,'feature_schema':SCHEMA,'extractor':EXTRACTOR,'window_ms':20000,
         'source_kind':'synthetic_test','license':'unit-only','label_kind':'self_report',
         'source_url':'https://example.invalid/unit-fixture'}
@@ -38,6 +42,10 @@ def test_training_is_subject_disjoint_and_fixture_cannot_be_enabled():
     lambda rows,m:rows[0].update(label=None),
     lambda rows,m:rows[0].update(vector=[.1]*80),
     lambda rows,m:rows[0].update(end_ms=1),
+    lambda rows,m:rows[0].update(extractor='OpenFace'),
+    lambda rows,m:rows[0].update(label_kind='emotion_mapping'),
+    lambda rows,m:rows[0].update(coverage=0),
+    lambda rows,m:rows[0].update(source_kind='other_source'),
 ])
 def test_incompatible_or_unlabelled_training_data_is_rejected(mutation):
     rows,m=dataset();mutation(rows,m)
@@ -66,8 +74,27 @@ def test_held_out_rows_do_not_affect_candidate_selection_or_scaling():
     rows,m=dataset();a,r=train(rows,m);test_subjects=set(r['split_subjects']['test'])
     changed=copy.deepcopy(rows)
     for row in changed:
-        if row['subject'] in test_subjects:row['vector']=[.5]*104;row['label']=1-row['label']
+        if row['subject'] in test_subjects:
+            row['vector']=[.5]*52+[0.]*52;row['label']=1-row['label']
+            for frame in row['frames']:frame['values']=[.5]*52
     b,s=train(changed,m)
     assert a['coef']==b['coef'] if a['kind']=='logistic' else a['trees']==b['trees']
     assert a['mean']==b['mean']
     assert r['selected_candidate']==s['selected_candidate']
+
+
+def test_binary_accuracy_cannot_enable_a_model_that_abstains_on_all_windows():
+    rows,m=dataset();rows=[];m['source_kind']='real_self_report'
+    # Artificial contract fixture deliberately mimics a low-confidence trained head.
+    for person in range(15):
+        for sample in range(20):
+            value=.2 if sample<10 else .8;start=sample*20000
+            label=int(sample%10<(4 if sample<10 else 6))
+            rows.append({'subject':f'p{person:02}','session':'unit','start_ms':start,'end_ms':start+20000,
+                'label':label,'vector':[value]*52+[0.]*52,'feature_schema':SCHEMA,'extractor':EXTRACTOR,
+                'source_kind':'real_self_report','label_kind':'self_report','coverage':1.,'valid_ms':20000,
+                'frames':[{'t_ms':start+i*500,'valid':True,'values':[value]*52} for i in range(41)]})
+    a,r=train(rows,m)
+    assert a['runtime_eligible'] is False
+    assert r['validation_runtime']['coverage']==0
+    assert r['held_out_test_runtime']['unknown_count']==60

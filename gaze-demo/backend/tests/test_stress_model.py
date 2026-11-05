@@ -63,3 +63,21 @@ def test_unknown_model_kind_or_unvalidated_artifact_is_not_enabled():
     for change in [{'kind':'pickle'},{'validation':{'eligible':False}},{'runtime_eligible':False}]:
         a=artifact();a.update(change)
         assert StressModel(a).predict([.2]*104)['state']=='unknown'
+
+
+def test_unrepresentable_artifact_and_overflow_math_fail_closed(tmp_path):
+    import json
+    a=artifact();a['mean'][0]=10**400
+    file=tmp_path/'bad.json';file.write_text(json.dumps(a))
+    assert StressModel.load(file).predict([.2]*104)['state']=='unknown'
+    a=artifact();a.update(scale=[1e-320]*104,coef=[0.]*104,intercept=0.)
+    assert StressModel(a).predict([.2]*104)['state']=='unknown'
+    a=artifact();a.update(coef=[1e308]*104,intercept=0.)
+    assert StressModel(a).predict([1.]*104)['state']=='unknown'
+
+
+def test_portable_forest_uses_same_float32_split_input_as_sklearn():
+    a=artifact();a.update(kind='forest',trees=[{'feature':[0,-2,-2],'left':[1,-1,-1],
+        'right':[2,-1,-1],'threshold':[.5,-2.,-2.],'probability':[.5,0.,1.]}])
+    # 0.50000001 rounds to exactly .5 for sklearn's float32 tree input.
+    assert StressModel(a).predict([.50000001]+[0.]*103)['score']==0.

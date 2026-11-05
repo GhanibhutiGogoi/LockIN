@@ -1,6 +1,6 @@
 import {GazeCapture} from './gaze.js';
 import {CaptureLoop} from './lifecycle.js';
-import {describePrediction} from './stress-contract.js';
+import {describePrediction,currentPrediction,suppressRelief,feedbackBody} from './stress-contract.js';
 import {petMarkup} from './stress-pets.js';
 
 const $=id=>document.getElementById(id);
@@ -8,6 +8,8 @@ const show=(id,value)=>{$(id).textContent=typeof value==='string'?value:JSON.str
 const notice=(message,error=false)=>{show('notice',message);$('notice').classList.toggle('error',error);};
 let users=JSON.parse(localStorage.getItem('lockin-debug-users-v1')||'[]');
 let identity=null,session=null,event=null,config=null,generation=0,replayTime=0,replaying=false,lastCapture=-1,captureOrigin=0,petTimer=null;
+let lastValidAt=-Infinity,competing=false,polling=false;
+const learningBus=typeof BroadcastChannel==='function'?new BroadcastChannel('lockin-learning-interventions'):null;
 const gaze=new GazeCapture($('camera'),message=>{
   if(message.startsWith('gaze '))return;
   notice(message.includes('校准')?'面部特征模型已加载，开始收集自然表情基线。':message);
@@ -18,8 +20,13 @@ const time=()=>session?.mode==='replay'?replayTime:Math.max(0,Date.now()-Date.pa
 
 async function api(path,body){
   const owner=identity?.user.id;
-  const response=await fetch('/v1'+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',...(identity?{Authorization:'Bearer '+identity.token}:{})},body:body===undefined?undefined:JSON.stringify(body)});
-  const data=await response.json();
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1500);
+  let response,data;
+  try{
+    response=await fetch('/v1'+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json',...(identity?{Authorization:'Bearer '+identity.token}:{})},body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal});
+    data=await response.json();
+  }catch(error){if(error.name==='AbortError')throw Error('本机后端未及时响应，已暂停旧状态。');throw error;}
+  finally{clearTimeout(timeout);}
   if(owner&&identity?.user.id!==owner)throw Error('用户已切换，旧请求已忽略。');
   if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail));
   return data;
@@ -37,9 +44,11 @@ function refreshUsers(){
   $('users').value=identity?.user.id||'';
 }
 function hidePet(){clearTimeout(petTimer);petTimer=null;$('relief').hidden=true;$('pet').replaceChildren();}
-function stopInputs(){captures.stop();gaze.stop();lastCapture=-1;}
+function stopInputs(){captures.stop();gaze.stop();lastCapture=-1;lastValidAt=-Infinity;}
 async function bank(){if(identity)show('bank',await api('/stress/bank'));}
 function render(prediction=session?.last_prediction){
+  prediction=currentPrediction(prediction,{mode:session?.mode,cameraLive:gaze.cameraLive(),lastValidAt,now:performance.now()});
+  if(competing)prediction={state:'unknown',reason:'learning_intervention_active'};
   locks();const text=describePrediction(prediction,session?.mode);
   show('state',text.title);show('explanation',text.explanation);
   show('source',session?`${session.mode==='replay'?'合成回放 · 非模型推断':'摄像头面部特征 · 实验性估计'}${active()?'':' · 已结束'}`:'尚未开始');
@@ -47,9 +56,11 @@ function render(prediction=session?.last_prediction){
   if(prediction?.reason==='learning_intervention_active'){hidePet();}
 }
 async function selectUser(id){
-  generation++;stopInputs();hidePet();identity=users.find(u=>u.user.id===id)||null;session=null;event=null;config=null;
+  generation++;stopInputs();hidePet();identity=users.find(u=>u.user.id===id)||null;session=null;event=null;config=null;competing=false;
+  $('before-rating').value='';$('after-rating').value='';
   $('feedback').hidden=true;for(const id of ['features','event','bank','config'])show(id,'暂无记录');
   refreshUsers();locks();if(!identity){render();return;}
+  document.querySelector('header a').href='/debug?user='+encodeURIComponent(identity.user.id);
   config=await api('/stress/status');show('config',config);
   const data=await api('/stress/bank');show('bank',data);
   session=data.sessions.filter(s=>s.phase==='active').at(-1)||null;
@@ -62,7 +73,8 @@ async function selectUser(id){
 
 async function present(next){
   event=next;show('event',event);$('feedback').hidden=true;
-  if(!active())return;
+  $('before-rating').value='';$('after-rating').value='';
+  if(!active()||competing)return;
   const markup=petMarkup(event.animation);if(!markup)throw Error('未知动画，已跳过显示。');
   const owner=identity.user.id,sid=session.id,eid=event.id,round=generation;
   const displayed=await api('/stress/events/'+eid+'/action',{kind:'shown',t_ms:time()});
@@ -95,9 +107,33 @@ async function upload(){
   try{
     const result=await api('/stress/sessions/'+sid+'/frames',data);
     if(round!==generation||session?.id!==sid||!active())return;
-    lastCapture=captured;await apply(result);
-  }catch(error){if(round===generation)notice(error.message,true);}
+    lastCapture=captured;if(result.accepted&&sample.valid)lastValidAt=sample.capturedAt;await apply(result);
+  }catch(error){if(round===generation){lastValidAt=-Infinity;hidePet();render({state:'unknown',reason:'upload_failed'});notice(error.message,true);}}
 }
+async function pollStatus(){
+  if(!active()||polling)return;
+  polling=true;const sid=session.id,round=generation;
+  try{
+    const current=await api('/stress/sessions/'+sid);
+    if(round!==generation||session?.id!==sid||!active())return;
+    competing=current.learning_intervention_active===true;
+    if(suppressRelief(current,true))hidePet();
+    if(current.last_t>=session.last_t)session=current;
+    render();
+  }catch(error){if(round===generation){lastValidAt=-Infinity;if(suppressRelief(null,false))hidePet();render({state:'unknown',reason:'upload_failed'});notice(error.message,true);}}
+  finally{polling=false;}
+}
+if(learningBus)learningBus.onmessage=({data})=>{
+  if(data?.user_id===identity?.user.id&&data.active===true){competing=true;hidePet();render({state:'unknown',reason:'learning_intervention_active'});}
+};
+const statusTimer=setInterval(()=>{void pollStatus();},1000);
+const freshnessTimer=setInterval(()=>{
+  if(active()&&session.mode==='live'){
+    const current=currentPrediction(session.last_prediction,{mode:'live',cameraLive:gaze.cameraLive(),lastValidAt,now:performance.now()});
+    if(current.state==='unknown'&&['camera_input_expired','camera_not_started'].includes(current.reason))hidePet();
+    render(current);
+  }
+},250);
 async function replay(state,seconds){
   if(!active()||session.mode!=='replay')throw Error('请先开始合成回放会话。');
   if(replaying)throw Error('上一段回放还在进行。');
@@ -149,7 +185,7 @@ $('label-window').onclick=safe(async()=>{
 $('dismiss').onclick=safe(dismiss);
 async function feedback(helpful){
   if(!event)throw Error('暂无动画事件。');
-  event=await api('/stress/events/'+event.id+'/feedback',{helpful});show('event',event);await bank();
+  event=await api('/stress/events/'+event.id+'/feedback',feedbackBody(helpful,$('before-rating').value,$('after-rating').value));show('event',event);await bank();
   notice('明确反馈已记录，动画偏好会保留来源和样本数。');
 }
 $('helpful').onclick=safe(()=>feedback(true));$('unhelpful').onclick=safe(()=>feedback(false));
@@ -162,5 +198,6 @@ $('export').onclick=safe(async()=>{
   const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
   const a=document.createElement('a');a.href=url;a.download='lockin-relief-'+identity.user.id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
-window.addEventListener('beforeunload',()=>{generation++;stopInputs();hidePet();});
-refreshUsers();locks();if(users.length)await safe(()=>selectUser(users[0].user.id))();else render();
+window.addEventListener('beforeunload',()=>{generation++;clearInterval(statusTimer);clearInterval(freshnessTimer);learningBus?.close();stopInputs();hidePet();});
+const requestedUser=new URL(location.href).searchParams.get('user');
+refreshUsers();locks();if(users.length)await safe(()=>selectUser(users.find(u=>u.user.id===requestedUser)?.user.id||users[0].user.id))();else render();

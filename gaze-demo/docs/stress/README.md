@@ -18,6 +18,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pip install -r backend/requirements-stress.txt
 npm ci
 npm run build
+.venv/bin/python scripts/fetch-models.py
 ./scripts/start-backend.sh
 ```
 
@@ -33,7 +34,7 @@ npm run build
 4. 点“误触发，排除记录”，偏好会重新计算并撤回；重复反馈不会增加样本数。
 5. 结束后换用户查看隔离。回放记忆在 `replay_sandbox`，永远不会改变真实用户偏好。
 
-动画与学习干预相互独立。学习视频/答题期间不显示新的放松动画；无题目解锁或强制播放。系统尊重浏览器减少动态效果的偏好。
+动画与学习干预相互独立。学习视频/答题期间不显示新的放松动画；已显示的动画会通过同源标签页通知及独立的后端状态检查收起，状态连接失效也会收起。无题目解锁或强制播放。系统尊重浏览器减少动态效果的偏好。历史高状态不会在摄像头关闭或过期时继续显示。
 
 ## 真实输入和自评标注
 
@@ -57,7 +58,7 @@ npm run build
 
 ## 训练接口与可复现性
 
-输入是一行一个已标注窗口的 JSONL：`subject`, `session`, `start_ms`, `end_ms`, `label`（0/1）, `vector`（52 均值再 52 标准差）。特征由 `lockin/stress/features.py` 同一因果聚合函数生成。每段 20 秒，最大有效相邻间隔 1500ms，至少 80% 有效覆盖；未知标签不能充当负样本。
+输入是一行一个已标注窗口的 JSONL：`subject`, `session`, `start_ms`, `end_ms`, `label`（0/1）, `vector`（52 均值再 52 标准差），以及逐行 `feature_schema`, `extractor`, `source_kind`, `label_kind`, `coverage`, `valid_ms`, `frames`（带时间/有效性/52 派生分数，非图像）。训练会核对逐行来源，再从 `frames` 用 `lockin/stress/features.py` 同一因果函数重算特征与覆盖证据，不只相信顶层 manifest。每段 20 秒，最大有效相邻间隔 1500ms，至少 80% 有效覆盖；未知标签不能充当负样本。
 
 先按实际授权数据填写 `training-input-manifest.example.json`，明确来源、许可、压力自评标签含义与输入 SHA-256。示例是说明文件，不是现成训练数据。
 
@@ -67,7 +68,7 @@ npm run build
 .venv/bin/python scripts/train-stress.py --input .stress-data/windows.jsonl --manifest .stress-data/manifest.json
 ```
 
-固定 seed=42，按参与者 60/20/20 分训练、验证、测试；至少 12 人且每个划分都有两个类别才可达到最低实验门槛。固定的验证门槛：balanced accuracy≥0.60，macro-F1≥dummy+0.05。门槛只是预声明的工程启用条件，不能证明我们用户上的准确率。报告包括被试划分、混淆矩阵、每个测试参与者结果、候选验证分数及最终测试分数；最终测试不用于选型。
+固定 seed=42，按参与者 60/20/20 分训练、验证、测试；至少 12 人且每个划分都有两个类别才可达到最低实验门槛。验证采用实际 0.35–0.75 弃判区，unknown 计为未检出；balanced accuracy≥0.60、macro-F1≥dummy+0.05、实际判断覆盖率≥50%，且同时有高/低判断，才可启用。门槛只是工程条件，不能证明我们用户上的准确率。报告包括被试划分、混淆矩阵、每个测试参与者结果、候选验证分数及最终测试分数，并单列实时判断覆盖/弃判数；最终测试不用于选型。
 
 便携 artifact 默认写 `backend/artifacts/stress-model.json`（Git 忽略），可通过 `LOCKIN_STRESS_MODEL` 指向；重启后端生效。未达门槛、不兼容、合成数据训练的 artifact 均拒绝启用。当前训练尝试结果见 [training-report.json](training-report.json)：明确 blocked，没有生成压力模型权重。软件测试中的人工数组只验证数学/流程，不是压力数据。
 
