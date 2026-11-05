@@ -3,7 +3,7 @@
   "training_ready": false,
   "new_download_budget_bytes": 3000000000,
   "conservative_audit_budget_reserved_bytes": 16000000,
-  "new_model_payload_downloaded_bytes": 0,
+  "new_model_payload_downloaded_bytes": 35040571,
   "known_training_data_preview_transferred_bytes": 200000,
   "raw_participant_files_saved": false,
   "candidates": [
@@ -48,5 +48,12 @@
       "outcome": "rejected_not_real_stress_ground_truth"
     }
   ],
-  "decision": "Use existing frozen MediaPipe 0.10.18 extractor and versioned 52-score causal aggregation. No compatible real-labelled training set has been obtained. Leave live pressure classifier disabled/unknown, retain explicitly synthetic replay, runnable training pipeline and self-report collection interface. Never reinterpret missing labels, task identity, emotion or model-generated scores as real stress labels."
+  "decision": "Real stress training remains unavailable. MVP uses frozen official FER+ for explicitly labelled facial-expression cues and temporal relief rules, not stress probabilities. No restricted participant data or synthetic stress targets used.",
+  "pretrained_expression_mvp": {
+    "model_id": "ferplus-8-a2a2ba6a",
+    "source": "official ONNX Model Zoo",
+    "target": "facial_expression_not_stress",
+    "training_required": false,
+    "stress_validated": false
+  }
 }

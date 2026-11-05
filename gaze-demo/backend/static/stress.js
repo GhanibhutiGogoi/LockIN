@@ -1,6 +1,6 @@
 import {GazeCapture} from './gaze.js';
 import {CaptureLoop} from './lifecycle.js';
-import {describePrediction,currentPrediction,suppressRelief,feedbackBody} from './stress-contract.js';
+import {describePrediction,currentPrediction,suppressRelief,feedbackBody,modelNote} from './stress-contract.js';
 import {petMarkup} from './stress-pets.js';
 
 const $=id=>document.getElementById(id);
@@ -13,7 +13,7 @@ const learningBus=typeof BroadcastChannel==='function'?new BroadcastChannel('loc
 const gaze=new GazeCapture($('camera'),message=>{
   if(message.startsWith('gaze '))return;
   notice(message.includes('校准')?'面部特征模型已加载，开始收集自然表情基线。':message);
-});
+},{expression:true});
 const captures=new CaptureLoop(upload,{intervalMs:500});
 const active=()=>session?.phase==='active';
 const time=()=>session?.mode==='replay'?replayTime:Math.max(0,Date.now()-Date.parse(session.created_at));
@@ -51,8 +51,8 @@ function render(prediction=session?.last_prediction){
   if(competing)prediction={state:'unknown',reason:'learning_intervention_active'};
   locks();const text=describePrediction(prediction,session?.mode);
   show('state',text.title);show('explanation',text.explanation);
-  show('source',session?`${session.mode==='replay'?'合成回放 · 非模型推断':'摄像头面部特征 · 实验性估计'}${active()?'':' · 已结束'}`:'尚未开始');
-  show('model-note',config?.model.available?'已加载实验模型；尚未在本项目用户上验证。':'没有已训练且兼容的压力模型。摄像头可用于检查面部输入，自动紧绷判断保持停用。');
+  show('source',session?`${session.mode==='replay'?'合成回放 · 非模型推断':session.inference==='expression_proxy'?'预训练 FER+ · 面部表情提示':'摄像头面部特征 · 实验性估计'}${active()?'':' · 已结束'}`:'尚未开始');
+  show('model-note',modelNote(config,session));
   if(prediction?.reason==='learning_intervention_active'){hidePet();}
 }
 async function selectUser(id){
@@ -88,28 +88,43 @@ async function dismiss(){
     event=await api('/stress/events/'+event.id+'/action',{kind:'dismiss',t_ms:time()});show('event',event);
   }
 }
-async function apply(result){
+async function apply(result,{showEvent=true}={}){
   session=result.session;render(result.prediction);
   if(result.window)show('features',{feature_schema:result.window.feature_schema,
     window_end_ms:result.window.window_end_ms,coverage:result.window.coverage,
     first_eight_means:result.window.vector?.slice(0,8)||null,
+    expression:result.prediction?.model?.target==='facial_expression_not_stress'?{probabilities:result.prediction.probabilities,top_expression:result.prediction.top_expression,negative_expression_evidence:result.prediction.expression_score,not_pressure:true}:null,
     baseline:session.baseline?{coverage:session.baseline.coverage,used_as_model_input:false}:'尚在采集或数据不足'});
-  if(result.event)await present(result.event);
+  if(showEvent&&result.event)await present(result.event);
 }
 async function upload(){
   if(!active()||session.mode!=='live'||!config)return;
-  const sid=session.id,round=generation;
-  const sample=gaze.facialSample(config.feature_names);
-  let captured=sample.valid?sample.capturedAt-captureOrigin:time();
-  if(sample.valid&&captured<=lastCapture)return;
-  captured=Math.max(0,captured);
-  const data={t_ms:captured,valid:sample.valid,values:sample.values,feature_schema:config.feature_schema};
+  const sid=session.id,round=generation,proxy=session.inference==='expression_proxy';
+  let samples=proxy?gaze.expressionSamples(config.feature_names):[gaze.facialSample(config.feature_names)];
+  if(!samples.length){
+    const current=gaze.expressionSample(config.feature_names);
+    if(current.valid)return;
+    samples=[current];
+  }
+  let offered=null;
   try{
-    const result=await api('/stress/sessions/'+sid+'/frames',data);
-    if(round!==generation||session?.id!==sid||!active())return;
-    lastCapture=captured;if(result.accepted&&sample.valid)lastValidAt=sample.capturedAt;await apply(result);
-  }catch(error){if(round===generation){lastValidAt=-Infinity;hidePet();render({state:'unknown',reason:'upload_failed'});notice(error.message,true);}}
+    for(const sample of samples){
+      let captured=sample.capturedAt!==null?sample.capturedAt-captureOrigin:time();
+      if(captured<=lastCapture)continue;
+      captured=Math.max(0,captured);
+      const data={t_ms:captured,valid:sample.valid,values:sample.values,feature_schema:config.feature_schema,
+        ...(sample.valid&&sample.expression?{expression:sample.expression}:{})};
+      const result=await api('/stress/sessions/'+sid+'/frames',data);
+      if(round!==generation||session?.id!==sid||!active())return;
+      lastCapture=captured;
+      if(result.accepted)lastValidAt=sample.valid?sample.capturedAt:-Infinity;
+      await apply(result,{showEvent:false});
+      if(result.event)offered=result.event;
+    }
+    if(offered&&session.last_prediction.state==='possible_tension'&&performance.now()-lastValidAt<1200)await present(offered);
+  }catch(error){if(round===generation){lastValidAt=-Infinity;gaze.invalidateExpression();hidePet();render({state:'unknown',reason:'upload_failed'});notice(error.message,true);}}
 }
+
 async function pollStatus(){
   if(!active()||polling)return;
   polling=true;const sid=session.id,round=generation;
@@ -159,7 +174,7 @@ $('create').onclick=safe(async()=>{
 $('users').onchange=safe(()=>selectUser($('users').value));
 $('start').onclick=safe(async()=>{
   generation++;stopInputs();hidePet();event=null;$('feedback').hidden=true;show('event','暂无事件');show('features','等待新输入');
-  session=await api('/stress/sessions',{mode:$('mode').value});replayTime=0;captureOrigin=performance.now()-time();lastCapture=-1;
+  session=await api('/stress/sessions',{mode:$('mode').value,inference:'expression_proxy'});replayTime=0;captureOrigin=performance.now()-time();lastCapture=-1;
   render();notice(session.mode==='live'?'会话已开始。点击启动摄像头后才会采集。':'合成会话已开始，可以检查触发、动画和记忆。');
 });
 $('end').onclick=safe(async()=>{
@@ -170,7 +185,7 @@ $('camera-start').onclick=safe(async()=>{
   if(!active()||session.mode!=='live')throw Error('请先开始摄像头会话。');
   const round=generation;await gaze.start();if(round!==generation||!active()){gaze.stop();return;}
   captureOrigin=performance.now()-time();lastCapture=-1;captures.start();
-  notice('摄像头已启动。面部特征留在本机；没有可用压力模型时只检查输入。');
+  notice('摄像头已启动，正在加载本机预训练表情模型；画面不会上传。连续有效输入约 30 秒后开始检查表情提示。');
 });
 $('camera-stop').onclick=safe(async()=>{stopInputs();render({state:'unknown',reason:'insufficient_fresh_coverage'});if(active()&&session.mode==='live')await upload();notice('摄像头已停止，后续输入按无法判断处理。');});
 $('replay-high').onclick=safe(()=>replay('possible_tension',12));

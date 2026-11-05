@@ -48,3 +48,20 @@ test('competing intervention or lost status connection hides a visible animal',(
   assert.equal(contract.suppressRelief({learning_intervention_active:false},false),true);
   assert.equal(contract.suppressRelief({learning_intervention_active:false},true),false);
 });
+
+test('pretrained expression cues never claim measured pressure or psychological recovery',()=>{
+  const high=describePrediction({state:'possible_tension',reason:'negative_expression_proxy'},'live');
+  assert.equal(high.title,'观察到明显负面表情');
+  assert.match(high.explanation,/不是压力/);
+  const low=describePrediction({state:'no_clear_tension',reason:'no_negative_expression_cue'},'live');
+  assert.equal(low.title,'未见明显负面表情');
+  assert.match(low.explanation,/不能/);
+});
+
+test('model note distinguishes idle pretrained assets, replay and missing runtime',()=>{
+  assert.equal(typeof contract.modelNote,'function');
+  const config={expression_model:{assets_available:true},model:{available:false}};
+  assert.match(contract.modelNote(config,null),/FER\+/);
+  assert.match(contract.modelNote(config,{mode:'replay',inference:'expression_proxy'}),/合成/);
+  assert.match(contract.modelNote({...config,expression_model:{assets_available:false}},null),/尚未安装/);
+});

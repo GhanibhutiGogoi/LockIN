@@ -1,3 +1,4 @@
+import {faceTensor} from './core/expression-input';
 import * as tf from '@tensorflow/tfjs';
 import WebEyeTrack from '../vendor/webeyetrack/WebEyeTrack';
 import type { GazeResult } from '../vendor/webeyetrack/types';
@@ -5,6 +6,7 @@ import { featuresFrom, quantile } from './rules';
 
 let tracker: WebEyeTrack;
 let busy = false;
+let expressionEnabled=false;
 let point: { index: number; x: number; y: number; start: number; validation: boolean; samples: GazeResult[]; features: number[][] } | null = null;
 let supports: { result: GazeResult; x: number; y: number }[] = [];
 let baseline: number[][] = [];
@@ -14,6 +16,7 @@ function send(type: string, payload: object = {}) { self.postMessage({ type, ...
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') {
+      expressionEnabled=data.expression===true;
       send('loading', { message: '正在加载本地预训练模型…' });
       try { await tf.setBackend('webgl'); await tf.ready(); }
       catch { await tf.setBackend('cpu'); await tf.ready(); }
@@ -60,6 +63,7 @@ self.onmessage = async ({ data }) => {
         features: f,
         face: r.facialLandmarks.length > 0,
         eyesOpen: r.gazeState === 'open',
+        expressionInput: expressionEnabled ? faceTensor(frame.data,data.width,data.height,r.facialLandmarks) : null,
         blendshapes: r.faceBlendshapes?.[0]?.categories.map(c => [c.categoryName, c.score]) ?? [],
         ms: elapsed,
       });

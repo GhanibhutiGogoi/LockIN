@@ -2,10 +2,24 @@ from typing import Literal
 from pydantic import Field,model_validator
 from ..schemas import Strict
 from .features import SCHEMA,validate_values
+from .expression import MODEL_ID
+import math
 
 
 class StartStress(Strict):
     mode:Literal['live','replay']='replay'
+    inference:Literal['stress_model','expression_proxy']='stress_model'
+
+
+class ExpressionEvidence(Strict):
+    model_id:Literal[MODEL_ID]
+    probabilities:list[float]=Field(min_length=8,max_length=8)
+
+    @model_validator(mode='after')
+    def normalized(self):
+        if any(not math.isfinite(v) or v<0 or v>1 for v in self.probabilities) or abs(sum(self.probabilities)-1)>.0001:
+            raise ValueError('eight normalized finite FER+ probabilities required')
+        return self
 
 
 class FeatureFrame(Strict):
@@ -13,11 +27,12 @@ class FeatureFrame(Strict):
     valid:bool=False
     feature_schema:Literal[SCHEMA]=SCHEMA
     values:list[float]|None=Field(default=None,max_length=52)
+    expression:ExpressionEvidence|None=None
 
     @model_validator(mode='after')
     def valid_scores(self):
         if self.valid:validate_values(self.values)
-        elif self.values is not None:raise ValueError('invalid frames must not carry usable scores')
+        elif self.values is not None or self.expression is not None:raise ValueError('invalid frames must not carry usable scores')
         return self
 
 

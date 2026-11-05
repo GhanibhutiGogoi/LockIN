@@ -4,13 +4,13 @@
 <header><a href="/debug">← 注意力调试</a><span>LockIN · 独立实验入口</span><h1>松一口气。</h1><p>观察面部变化，试试一段小小的放松动画。</p></header>
 <p id="notice" role="status">先选择用户。摄像头只会在你点击后启动。</p>
 <section class="setup"><label>用户<select id="users"><option value="">请选择用户</option></select></label><label>新用户<input id="name" maxlength="80" placeholder="用于区分你自己的记忆"></label><button id="create">创建</button>
-<label>输入方式<select id="mode"><option value="replay">合成回放 · 检查流程</option><option value="live">摄像头 · 检查面部输入</option></select></label><button id="start">开始</button><button id="end" disabled>结束</button></section>
-<section class="signal"><div><p id="source" class="eyebrow">尚未开始</p><h2 id="state">等待输入</h2><p id="explanation">这是实验性的紧绷估计，不是压力诊断。</p><p id="model-note">正在读取模型状态。</p></div><video id="camera" autoplay muted playsinline aria-label="你的摄像头预览"></video></section>
-<section id="live-controls" hidden><button id="camera-start">启动摄像头</button><button id="camera-stop">停止摄像头</button><p>先保持自然表情约 30 秒，建立可检查的个人基线。原始摄像头画面保留在本机；只发送面部特征到本机后端。基线不代表已经放松，也不会偷偷改变模型输入。</p></section>
+<label>输入方式<select id="mode"><option value="replay">合成回放 · 检查流程</option><option value="live">摄像头 · 预训练表情提示</option></select></label><button id="start">开始</button><button id="end" disabled>结束</button></section>
+<section class="signal"><div><p id="source" class="eyebrow">尚未开始</p><h2 id="state">等待输入</h2><p id="explanation">使用预训练模型观察面部表情，不测量压力。</p><p id="model-note">正在读取模型状态。</p></div><video id="camera" autoplay muted playsinline aria-label="你的摄像头预览"></video></section>
+<section id="live-controls" hidden><button id="camera-start">启动摄像头</button><button id="camera-stop">停止摄像头</button><p>先保持自然表情，建立约 30 秒观察窗口的基线（至少 80% 有效面部覆盖）。原始摄像头画面保留在本机；只发送面部特征到本机后端。基线不代表已经放松，不进入模型输入。随后连续 10 秒明显负面表情可触发一次动画，3 分钟内不会重复。</p></section>
 <section id="label-controls" hidden><label>刚才 20 秒，你觉得自己有多紧绷？（0 为完全不紧绷，10 为非常紧绷）<input id="self-rating" type="range" min="0" max="10" step="1" value="5"><output id="rating-value">5</output></label><button id="label-window">自愿保存这一段的评分与面部特征</button><p>这用于你和 Yingwen 的后续试用标注，不保存摄像头图像。4–6 分保留为不明确，不会自动充当高／低压力训练标签。</p></section>
 <section id="replay-controls" hidden><p><strong>合成演示：</strong>下面按钮提交预设状态，不是模型识别结果，不会更新真人偏好。</p><button id="replay-high">回放持续紧绷 12 秒</button><button id="replay-low">回放自然状态 3 秒</button><button id="replay-unknown">回放无法判断</button></section>
 <section id="relief" class="relief" hidden aria-live="polite"><div class="relief-heading"><h2>陪它一起伸个懒腰。</h2><button id="dismiss" aria-label="关闭放松动画">关闭</button></div><div id="pet" class="pet" role="img" aria-label="正在打哈欠或伸懒腰的小动物"></div><p>随时可以关掉，继续你的事情。</p></section>
 <section id="feedback" hidden><h2>刚才的小动画有帮助吗？</h2><p>可选：回顾动画前后的紧绷程度（0–10）。这是主观回顾，不是摄像头测量。</p><label>动画前<input id="before-rating" type="number" min="0" max="10" step="1" placeholder="可留空"></label><label>动画后<input id="after-rating" type="number" min="0" max="10" step="1" placeholder="可留空"></label><button id="helpful">有帮助</button><button id="unhelpful">没什么帮助</button><button id="exclude">这是误触发，排除记录</button><p>只有你的明确反馈会影响后续动画选择。微笑不等于压力已经下降。</p></section>
 <details><summary>检查输入与判断过程</summary><h3>模型配置</h3><pre id="config"></pre><h3>面部特征与有效覆盖</h3><pre id="features">暂无数据</pre><h3>触发原因、读取的记忆与事件</h3><pre id="event">暂无事件</pre><h3>当前用户的记忆更新</h3><pre id="bank">暂无记录</pre><button id="export">导出当前用户记录</button></details>
-<footer>默认不会展示未经验证的“压力百分比”。模型缺失、数据不足或摄像头停止时，结果为“无法判断”。</footer>
+<footer>预训练 FER+ 只识别表情，不展示“压力百分比”。模型缺失、数据不足或摄像头停止时，结果为“无法判断”。</footer>
 </main><script type="module" src="/debug-static/stress.js"></script></body></html>

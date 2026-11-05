@@ -3,6 +3,7 @@ from datetime import datetime,timezone
 from ..store import uid,now
 from .features import aggregate,MAX_GAP_MS,SCHEMA,EXTRACTOR
 from .model import StressModel
+from .expression import predict as expression_prediction
 
 ANIMATIONS=['cat_yawn','dog_stretch']
 
@@ -23,7 +24,7 @@ class StressService:
             if t>elapsed+2000 or elapsed-t>2000:raise ValueError('stale or future facial capture')
 
     def start(self,user,request):
-        s={'id':uid(),'mode':request.mode,'created_at':now(),'phase':'active','last_t':-1,'window':[],
+        s={'id':uid(),'mode':request.mode,'inference':request.inference,'created_at':now(),'phase':'active','last_t':-1,'window':[],
             'since':None,'cooldown_until':0,'event_ids':[],'last_prediction':{'state':'unknown','reason':'waiting_for_input'},
             'baseline':None,'baseline_start':None,'baseline_samples':[],'labelled_windows':[]}
         with self.store.transaction(user) as tx:
@@ -72,10 +73,11 @@ class StressService:
                 return ((m['helpful_count']+1)/(m['count']+2),animation==rotation)
             choice=max(ANIMATIONS,key=preference)
             emitted=max(t,(datetime.now(timezone.utc)-datetime.fromisoformat(s['created_at'])).total_seconds()*1000) if s['mode']=='live' else t
-            event={'id':uid(),'session_id':s['id'],'source':'derived_camera_features' if s['mode']=='live' else 'synthetic_replay',
+            proxy=s['mode']=='live' and s.get('inference')=='expression_proxy'
+            event={'id':uid(),'session_id':s['id'],'source':('pretrained_expression_proxy' if proxy else 'derived_camera_features') if s['mode']=='live' else 'synthetic_replay',
                 'namespace':namespace,'trigger_at_ms':t,'emitted_at_ms':emitted,'animation':choice,'phase':'offered',
-                'model':self.model.status(),'model_score':prediction.get('score'),'feature_window':window,
-                'baseline':s['baseline'],'reason':'continuous_possible_tension_10s' if s['mode']=='live' else 'scripted_replay_10s',
+                'model':prediction.get('model',self.model.status()),'model_score':prediction.get('score'),'expression_score':prediction.get('expression_score'),'feature_window':window,
+                'baseline':s['baseline'],'reason':('continuous_negative_expression_10s' if proxy else 'continuous_possible_tension_10s') if s['mode']=='live' else 'scripted_replay_10s',
                 'retrieved_memories':memories,'feedback':None,'excluded':False,'actions':[]}
             tx.put('stress_event',event['id'],event)
             s['event_ids'].append(event['id']);s['cooldown_until']=t+180000;s['since']=None
@@ -103,6 +105,7 @@ class StressService:
                         'end_ms':frame.t_ms,'used_as_model_input':False,'label':'observed facial baseline; not a verified relaxed state'}
                     s['baseline_samples']=[]
             prediction=self.model.predict(window['vector']) if window['vector'] is not None else {'state':'unknown','score':None,'reason':'insufficient_fresh_coverage','experimental':True}
+            if s.get('inference')=='expression_proxy':prediction=expression_prediction(frame.expression,frame.valid)
             if s['baseline'] is None:prediction={'state':'unknown','score':None,'reason':'baseline_pending','experimental':True}
             return self._advance(tx,s,frame.t_ms,prediction,window)
 

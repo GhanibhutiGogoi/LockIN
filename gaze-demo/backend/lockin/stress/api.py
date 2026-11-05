@@ -1,4 +1,6 @@
 """Auth-scoped stress routes share the application's existing origin boundary."""
+from pathlib import Path
+from .expression import status as expression_status,assets_present
 from fastapi import APIRouter,Depends
 from .features import SCHEMA,NAMES,EXTRACTOR
 from .schemas import StartStress,FeatureFrame,ReplayState,Feedback,EventAction,Exclusion,SelfReport
@@ -9,7 +11,10 @@ def register(app,service,user):
 
     @router.get('/status')
     def status(id=Depends(user)):
-        return {'model':service.model.status(),'feature_schema':SCHEMA,'feature_names':NAMES,'extractor':EXTRACTOR,
+        assets=Path(__file__).resolve().parents[3]/'public'
+        expression=expression_status()
+        expression['assets_available']=assets_present(assets)
+        return {'model':service.model.status(),'expression_model':expression,'feature_schema':SCHEMA,'feature_names':NAMES,'extractor':EXTRACTOR,
             'window_ms':20000,'minimum_coverage':.8,'baseline_ms':30000,'dwell_ms':10000,'cooldown_ms':180000,
             'note':'Possible tension only. No pressure diagnosis or calibrated percentage. Replay does not use a trained model.'}
 
