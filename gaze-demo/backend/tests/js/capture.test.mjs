@@ -27,6 +27,14 @@ test('fast requests wait only the remainder of the cadence',async()=>{
   assert.equal(pending.delay,1800);loop.stop();assert.equal(pending,null);
 });
 
+test('browser timer functions are invoked with their valid receiver',t=>{
+  t.mock.method(globalThis,'clearTimeout',function(){
+    if(this!==undefined&&this!==globalThis)throw new TypeError('Illegal invocation');
+  });
+  const loop=new lifecycle.CaptureLoop(async()=>{});
+  assert.doesNotThrow(()=>loop.stop());
+});
+
 async function camera(t){
   let now=1000,loop;const messages=[];
   const track={readyState:'live',muted:false,stop(){this.readyState='ended';}};
@@ -56,6 +64,19 @@ async function camera(t){
   gaze=new GazeCapture(video,()=>{});await gaze.start();gaze.calibrated=true;gaze.size=[1000,800];
   return {gaze,video,track,messages,tick(time){now=time;loop();}};
 }
+
+test('camera adapter can stop on an independent page without calibration controls',async t=>{
+  const c=await camera(t);document.getElementById=()=>null;
+  assert.doesNotThrow(()=>c.gaze.stop());
+});
+
+test('facial sample uses real frame age and does not require gaze calibration',async t=>{
+  const c=await camera(t),names=Array.from({length:52},(_,i)=>'b'+i);
+  c.tick(1000);c.gaze.calibrated=false;c.gaze.latest.open=false;
+  c.gaze.latest.blendshapes=names.map(name=>[name,.2]);
+  assert.deepEqual(c.gaze.facialSample(names).values,Array(52).fill(.2));
+  c.tick(3000);assert.equal(c.gaze.facialSample(names).valid,false);
+});
 
 test('a frozen webcam frame expires instead of being stamped as new gaze',async t=>{
   const c=await camera(t);c.tick(1000);assert.equal(c.gaze.sample().valid,true);

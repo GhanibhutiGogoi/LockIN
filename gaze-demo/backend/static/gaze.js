@@ -1,4 +1,5 @@
 /** Adapter for the existing frozen pretrained worker. Raw frames never leave browser. */
+import {orderedScores} from './stress-contract.js';
 export class GazeCapture {
   constructor(video, status) { this.video=video;this.status=status;this.stream=null;this.worker=null;this.ready=false;this.busy=false;this.calibrated=false;this.latest=null;this.lastFrame=0;this.lastVideoTime=null;this.canvas=document.createElement('canvas');this.canvas.width=640;this.canvas.height=480;this.ctx=this.canvas.getContext('2d',{willReadFrequently:true});this.round=0; }
   cameraLive(){const track=this.stream?.getVideoTracks()[0];return !!track&&track.readyState==='live'&&!track.muted&&!this.video.paused&&!this.video.ended&&this.video.readyState>=2;}
@@ -14,7 +15,7 @@ export class GazeCapture {
       if(d.type==='ready'){this.ready=true;this.status('预训练 gaze 已就绪，请校准。');}
       if(['result','idle','error'].includes(d.type))this.busy=false;
       if(d.type==='result'&&this.cameraLive()){
-        this.latest={t:d.capturedAt,face:d.face,open:d.eyesOpen,gaze:d.gaze};
+        this.latest={t:d.capturedAt,face:d.face,open:d.eyesOpen,gaze:d.gaze,blendshapes:d.blendshapes};
         if(!this.point)this.status(`gaze ${d.gaze?.map(x=>x.toFixed(2)).join(', ')??'不可用'} · ${this.calibrated?'已通过校准验证':'未校准'}`);
       }
       if(d.type==='pointProgress')document.getElementById('cal-status').textContent=`点 ${this.index+1} / ${this.validation?3:9} · ${d.count}/7`;
@@ -51,6 +52,12 @@ export class GazeCapture {
   sample(){if(!this.cameraLive())this.latest=null;const l=this.latest;const age=l?performance.now()-l.t:Infinity;const valid=!!l&&age>=0&&age<1200&&l.face&&l.open&&l.gaze?.every(Number.isFinite)&&!this.point;
     const calibrated=this.calibrated&&this.size?.[0]===innerWidth&&this.size?.[1]===innerHeight;
     return {valid:!!valid,calibrated:!!calibrated,on_screen:valid?l.gaze.every(x=>Math.abs(x)<=.5):null,x:valid?l.gaze[0]:null,y:valid?l.gaze[1]:null};}
-  cancel(){clearTimeout(this.timeout);this.point=null;this.worker?.postMessage({type:'cancelPoint'});document.getElementById('calibration').hidden=true;}
+  facialSample(names){
+    if(!this.cameraLive())this.latest=null;
+    const l=this.latest,age=l?performance.now()-l.t:Infinity;
+    const values=l&&l.face&&age>=0&&age<1200?orderedScores(l.blendshapes,names):null;
+    return {valid:values!==null,values,capturedAt:values?l.t:null};
+  }
+  cancel(){clearTimeout(this.timeout);this.point=null;this.worker?.postMessage({type:'cancelPoint'});const overlay=document.getElementById('calibration');if(overlay)overlay.hidden=true;}
   stop(){this.round++;clearInterval(this.raf);this.cancel();this.stream?.getTracks().forEach(t=>t.stop());this.stream=null;this.video.srcObject=null;this.worker?.terminate();this.worker=null;this.ready=false;this.calibrated=false;this.latest=null;this.busy=false;this.lastFrame=0;this.lastVideoTime=null;}
 }

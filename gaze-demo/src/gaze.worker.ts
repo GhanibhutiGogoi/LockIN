@@ -60,6 +60,7 @@ self.onmessage = async ({ data }) => {
         features: f,
         face: r.facialLandmarks.length > 0,
         eyesOpen: r.gazeState === 'open',
+        blendshapes: r.faceBlendshapes?.[0]?.categories.map(c => [c.categoryName, c.score]) ?? [],
         ms: elapsed,
       });
       if (point && f && performance.now() - point.start > 650 && performance.now() - lastSample > 100) {

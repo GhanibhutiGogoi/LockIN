@@ -17,7 +17,7 @@ export class CaptureLease {
 
 /** One request at a time; slow requests do not lose an entire timer tick. */
 export class CaptureLoop {
-  constructor(task,{intervalMs=3000,now=()=>performance.now(),schedule=setTimeout,cancel=clearTimeout}={}){
+  constructor(task,{intervalMs=3000,now=()=>performance.now(),schedule=(fn,delay)=>setTimeout(fn,delay),cancel=id=>clearTimeout(id)}={}){
     this.task=task;this.intervalMs=intervalMs;this.now=now;this.schedule=schedule;this.cancel=cancel;this.generation=0;this.timer=null;
   }
   start(){this.stop();void this.run(this.generation);}

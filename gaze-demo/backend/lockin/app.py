@@ -15,6 +15,9 @@ from pydantic import Field
 from typing import Literal
 from .providers import configured_memory,configured_screen
 from .evaluation import evaluate
+from .stress.api import register as register_stress
+from .stress.service import StressService
+from .stress.model import StressModel
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -27,7 +30,7 @@ class Video(Strict):
     question:str=Field(min_length=1,max_length=2000)
 
 
-def create_app(db_path=None,screen_provider=None,memory=None):
+def create_app(db_path=None,screen_provider=None,memory=None,stress_model=None):
     app=FastAPI(title='LockIN attention harness',version='0.2.0')
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=['127.0.0.1','localhost','testserver'])
     store=Store(db_path or os.getenv('LOCKIN_DB',ROOT/'backend/data/lockin.db'))
@@ -39,6 +42,10 @@ def create_app(db_path=None,screen_provider=None,memory=None):
         id=store.authenticate(auth.credentials) if auth else None
         if not id:raise HTTPException(401,'valid local user token required')
         return id
+
+    tension=StressService(store,stress_model or StressModel.load(os.getenv('LOCKIN_STRESS_MODEL',ROOT/'backend/artifacts/stress-model.json')))
+    register_stress(app,tension,user)
+    app.state.stress=tension
 
     @app.exception_handler(KeyError)
     async def missing(req,exc):return JSONResponse({'detail':'resource not found'},status_code=404)
@@ -63,6 +70,9 @@ def create_app(db_path=None,screen_provider=None,memory=None):
 
     @app.get('/debug')
     def debug():return FileResponse(ROOT/'backend/static/index.html')
+
+    @app.get('/stress-debug')
+    def stress_debug():return FileResponse(ROOT/'backend/static/stress.html')
 
     @app.post('/v1/users')
     def new_user(req:NewUser):
