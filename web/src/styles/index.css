@@ -1,0 +1,512 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/archivo/wdth.css';
+@import '@fontsource-variable/atkinson-hyperlegible-next/index.css';
+@import './tokens.css';
+
+:root {
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, monospace; /* dev tools only */
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-desk: var(--desk);
+  --color-raised: var(--raised);
+  --color-sheet: var(--sheet);
+  --color-slide: var(--slide);
+  --color-ink: var(--ink);
+  --color-graphite: var(--graphite);
+  --color-pencil: var(--pencil);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-pen: var(--pen);
+  --color-pen-ink: var(--pen-ink);
+  --color-pen-soft: var(--pen-soft);
+  --color-highlight: var(--highlight);
+  --color-on-highlight: var(--on-highlight);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-lapse: var(--lapse);
+  --color-lapse-soft: var(--lapse-soft);
+  --color-rot-bg: var(--rot-bg);
+  --color-rot-ink: var(--rot-ink);
+  --color-rot-dim: var(--rot-dim);
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+/* ───────── base ───────── */
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+h1,
+h2,
+h3 {
+  font-family: var(--font-body);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.1;
+  text-wrap: balance;
+  margin: 0;
+}
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+:focus-visible {
+  outline: 2px solid var(--pen);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+::selection {
+  background: var(--highlight);
+  color: var(--on-highlight);
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+/* the one big figure on a screen: Atkinson's slashed zero reads as Ø at this size */
+.figure {
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 100;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
+}
+.label {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--graphite);
+}
+
+/* highlighter swipe: flat marker colour, uneven ends like a real stroke */
+.hl {
+  background: var(--highlight);
+  color: var(--on-highlight);
+  padding: 0 0.16em;
+  margin: 0 -0.04em;
+  border-radius: 0.12em 0.3em 0.18em 0.34em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+}
+
+@layer components {
+/* ───────── controls ─────────
+ * Buttons are fully round, decided once. The primary is ink (inverted in dark);
+ * nothing in the chrome carries a hue. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0 1.125rem;
+  border-radius: var(--r-control);
+  border: 0;
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background-color 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary,
+.btn-ink {
+  background: var(--ink);
+  color: var(--paper);
+}
+.btn-primary:hover:not(:disabled),
+.btn-ink:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 82%, var(--paper));
+}
+.btn-quiet {
+  background: var(--raised);
+  color: var(--ink);
+}
+.btn-quiet:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--raised) 80%, var(--ink));
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--graphite);
+  padding: 0 0.625rem;
+}
+.btn-ghost:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--raised);
+}
+.btn-sm {
+  min-height: 2.25rem;
+  padding: 0 0.875rem;
+  font-size: 14px;
+}
+.btn-lg {
+  min-height: 3.25rem;
+  padding: 0 1.75rem;
+  font-size: 17px;
+}
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--graphite);
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+.icon-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--raised);
+}
+.icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.link {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ink) 35%, transparent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-weight: 600;
+  transition: text-decoration-color 140ms var(--ease-out);
+}
+.link:hover {
+  text-decoration-color: var(--ink);
+}
+
+kbd,
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5em;
+  height: 1.5em;
+  padding: 0 0.35em;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-family: var(--font-body);
+  font-size: 0.78em;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2rem;
+  padding: 0 0.875rem;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.field {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--rule-strong);
+  background: var(--slide);
+  color: var(--ink);
+  font: inherit;
+}
+.field:focus-visible {
+  outline-offset: 0;
+}
+
+.sheet-surface {
+  background: var(--sheet);
+  border-radius: 12px;
+}
+
+/* segmented control */
+.seg {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--raised);
+}
+.seg button {
+  border: 0;
+  background: transparent;
+  border-radius: 999px;
+  min-height: 2.25rem;
+  padding: 0 1rem;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--graphite);
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+.seg button:hover {
+  color: var(--ink);
+}
+.seg button[aria-pressed='true'] {
+  background: var(--seg-on);
+  color: var(--ink);
+}
+
+/* range input */
+input[type='range'] {
+  accent-color: var(--ink);
+  width: 100%;
+}
+
+/* toggle */
+.switch {
+  position: relative;
+  width: 2.5rem;
+  height: 1.5rem;
+  flex: none;
+  border-radius: 999px;
+  border: 0;
+  background: var(--rule-strong);
+  transition: background-color 150ms var(--ease-out);
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 999px;
+  background: var(--sheet);
+  transition: transform 160ms var(--ease-out);
+}
+.switch[aria-checked='true'] {
+  background: var(--ink);
+}
+.switch[aria-checked='true']::after {
+  transform: translateX(1rem);
+}
+
+/* ───────── study mode ───────── */
+.chrome {
+  transition: opacity 600ms var(--ease-out);
+}
+.chrome[data-quiet='true'] {
+  opacity: 0;
+}
+/* leaves slowly, arrives quickly when you reach for it */
+.chrome[data-quiet='false'] {
+  transition-duration: 180ms;
+}
+.chrome[data-quiet='true']:hover,
+.chrome[data-quiet='true']:focus-within {
+  opacity: 1;
+}
+
+/* drifting nudge: a soft amber glow from the screen edge — no text, no sound */
+.drift-glow {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  opacity: 0;
+  box-shadow:
+    inset 0 0 0 3px color-mix(in srgb, var(--warn) 70%, transparent),
+    inset 0 0 90px 10px color-mix(in srgb, var(--warn) 32%, transparent);
+  transition: opacity 700ms var(--ease-out);
+}
+.drift-glow[data-on='true'] {
+  opacity: 1;
+  animation: breathe 3.2s ease-in-out infinite;
+}
+
+/* ───────── rescue mode ───────── */
+.rot-caption {
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 72;
+  font-weight: 900;
+  text-transform: uppercase;
+  line-height: 0.95;
+  letter-spacing: 0.005em;
+  color: var(--rot-ink);
+  paint-order: stroke fill;
+  -webkit-text-stroke: 0.14em var(--rot-stroke);
+  text-shadow: 0 0.06em 0.2em rgba(0, 0, 0, 0.55);
+}
+.rot-caption .now {
+  color: var(--highlight);
+}
+.rot-pop {
+  animation: pop 160ms var(--ease-snap);
+}
+
+.rescue-in {
+  animation: rescue-in 220ms var(--ease-out);
+}
+.fade-in {
+  animation: fade-in 240ms var(--ease-out);
+}
+.rise {
+  animation: rise 260ms var(--ease-out) both;
+}
+
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes pop {
+  from {
+    transform: scale(0.86);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+@keyframes rescue-in {
+  from {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+  .drift-glow[data-on='true'] {
+    opacity: 1;
+  }
+}
+
+/* scrollbars that belong to the paper */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+}
+
+/* ───────── home ───────── */
+/* "In" under the highlighter, like the wordmark */
+.home-in {
+  background: var(--highlight);
+  color: var(--on-highlight);
+  /* the swipe reaches into the margin so the I still lines up under the L */
+  padding: 0 0.06em;
+  margin-left: -0.08em;
+}
+
+/* the name as the hero: wide Archivo, the two lines almost touching */
+.home-name {
+  font-family: var(--font-display);
+  font-variation-settings: 'wdth' 125;
+  font-weight: 800;
+  font-size: min(27vw, 30svh);
+  line-height: 0.82;
+  letter-spacing: -0.045em;
+}
+@media (min-width: 1024px) {
+  .home-name {
+    font-size: min(21vw, 34svh);
+  }
+}
+.home-line {
+  display: block;
+  overflow: hidden;
+  padding-bottom: 0.04em;
+}
+.home-line > span {
+  display: inline-block;
+  animation: home-line 900ms var(--ease-out) both;
+}
+.home-after {
+  animation: fade-in 500ms var(--ease-out) 650ms both;
+}
+@keyframes home-line {
+  from {
+    transform: translateY(105%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* entrances: parts rise once as their section arrives; without script they are simply there */
+.reveal-on .reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 700ms var(--ease-out) var(--d, 0ms),
+    transform 700ms var(--ease-out) var(--d, 0ms);
+}
+.reveal-on .reveal.in {
+  opacity: 1;
+  transform: none;
+}
+

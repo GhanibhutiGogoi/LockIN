@@ -1,0 +1,113 @@
+/*
+ * LockIn design tokens.
+ * Direction: the slide is the only lit thing in the room. Chrome holds no
+ * colour: actions are ink, the one data hue (--pen) marks the focus line in the
+ * report, and the highlighter is the product's signature. Rescue mode is a
+ * black 9:16 phone column that takes over the whole screen.
+ *
+ * Names are kept from the first pass so the Tailwind utilities still read:
+ * paper = ground, sheet = raised surface, ink / graphite / pencil = three text
+ * tiers, rule = the few lines that remain (inputs, the chart grid).
+ */
+:root {
+  /* study mode — light */
+  --paper: #f1f2f4;        /* ground: cool blue-grey, never cream */
+  --desk: #e4e6e9;         /* the room around the slide in study mode */
+  --sheet: #ffffff;        /* raised surfaces */
+  --raised: #e8eaed;       /* one tone step off the ground: wells, hover */
+  --seg-on: #ffffff;       /* the chosen segment: one step up from its track */
+  --slide: #ffffff;        /* the slide itself */
+  --viewfinder: #0c0d0f;   /* the camera preview on setup */
+  --ink: #0c0d0f;          /* primary text, the primary button */
+  --graphite: #50555d;     /* secondary text (6.6:1 on ground) */
+  --pencil: #61666e;       /* meta (5.1:1 on ground) */
+  --rule: #e1e3e7;
+  --rule-strong: #c9ccd2;
+  --pen: #1d5fbf;          /* the one data hue + focus ring */
+  --pen-ink: #ffffff;
+  --pen-soft: #e3ecfa;
+  --highlight: #eeea3f;    /* highlighter: key terms, spoken word, the wordmark */
+  --on-highlight: #0c0d0f;
+  --ok: #247b50;
+  --ok-soft: #dcf3e5;
+  --warn: #a8670a;
+  --warn-soft: #f7ead2;
+  --lapse: #c4242a;
+  --lapse-soft: #fbe3e1;
+  --shadow-float: 0 12px 32px -12px rgba(12, 13, 15, 0.28);
+
+  /* rescue mode — one world, same in both themes */
+  --rot-bg: #000000;
+  --rot-ink: #ffffff;
+  --rot-dim: #a3a5ab;
+  --rot-stroke: #000000;
+
+  /* type: one family for reading, a condensed black reserved for the wordmark and rescue captions */
+  --font-display: 'Archivo Variable', 'Archivo', 'Arial Narrow', system-ui, sans-serif;
+  --font-body: 'Atkinson Hyperlegible Next Variable', 'Atkinson Hyperlegible Next', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --r-paper: 4px;
+  --r-control: 999px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snap: cubic-bezier(0.3, 1.4, 0.5, 1);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #0e0f11;
+    --desk: #060607;
+    --sheet: #18191c;
+    --raised: #1f2024;
+    --seg-on: #393c42;
+    --slide: #1b1c1f;
+    --viewfinder: #1b1c1f;
+    --ink: #eeeff1;
+    --graphite: #a9adb4;
+    --pencil: #8f939b;
+    --rule: #26282c;
+    --rule-strong: #393c42;
+    --pen: #7aa5ff;
+    --pen-ink: #0b1020;
+    --pen-soft: #162238;
+    --highlight: #e4e046;
+    --on-highlight: #0c0d0f;
+    --ok: #4fc285;
+    --ok-soft: #142a1e;
+    --warn: #e3a641;
+    --warn-soft: #3a2c12;
+    --lapse: #f0646a;
+    --lapse-soft: #3a1a1c;
+    --shadow-float: 0 16px 40px -12px rgba(0, 0, 0, 0.7);
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --paper: #0e0f11;
+  --desk: #060607;
+  --sheet: #18191c;
+  --raised: #1f2024;
+  --seg-on: #393c42;
+  --slide: #1b1c1f;
+  --viewfinder: #1b1c1f;
+  --ink: #eeeff1;
+  --graphite: #a9adb4;
+  --pencil: #8f939b;
+  --rule: #26282c;
+  --rule-strong: #393c42;
+  --pen: #7aa5ff;
+  --pen-ink: #0b1020;
+  --pen-soft: #162238;
+  --highlight: #e4e046;
+  --on-highlight: #0c0d0f;
+  --ok: #4fc285;
+  --ok-soft: #142a1e;
+  --warn: #e3a641;
+  --warn-soft: #3a2c12;
+  --lapse: #f0646a;
+  --lapse-soft: #3a1a1c;
+  --shadow-float: 0 16px 40px -12px rgba(0, 0, 0, 0.7);
+  color-scheme: dark;
+}
