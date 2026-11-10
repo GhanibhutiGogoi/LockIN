@@ -7,9 +7,9 @@
 | Team | Interface | How you connect | Default URL |
 |---|---|---|---|
 | 視線追蹤 Gaze tracking | `AttentionProvider` | WebSocket **or** in-browser plugin | `ws://localhost:8765` |
-| AI 分析 AI analysis | `ContentProvider` | HTTP | `http://localhost:8000` |
-| 做影片 Video | `MediaProvider` | HTTP | `http://localhost:8001` |
-| 個人化 AI Personal AI | `AdaptiveProvider` | HTTP | `http://localhost:8002` |
+| AI 分析 AI analysis | `ContentProvider` | HTTP | `http://localhost:8010` |
+| 做影片 Video | `MediaProvider` | HTTP | `http://localhost:8011` |
+| 個人化 AI Personal AI | `AdaptiveProvider` | HTTP | `http://localhost:8012` |
 
 All shapes are defined once in [`src/contracts/types.ts`](../src/contracts/types.ts).
 That file is the source of truth; this page explains it.
@@ -39,13 +39,16 @@ The UI owns: the camera stream, window focus, smoothing, the state machine
 (thresholds from the proposal), the pack cache, playback, quiz, and the report.
 Every team owns one box and talks to the UI only through its interface.
 
+**Ports.** The UI dev server runs on `5180` and the example services on
+`8010`–`8012`, so they don't clash with `gaze-demo/` (5173 and 8000).
+
 **Wire conventions (all HTTP + WS):**
 
 - JSON. Send `snake_case` or `camelCase`; the UI converts both ways
   (requests are sent as `snake_case`).
 - Times inside media are **seconds**; timestamps (`t`, `started_at`) are **ms since epoch**.
 - Relative URLs in responses (`audio_url`, `pdf_url`, b-roll `url`) are resolved against your base URL.
-- Enable CORS for the UI origin (`http://localhost:5173` in dev).
+- Enable CORS for the UI origin (`http://localhost:5180` in dev).
 - A `GET /health` returning `200` is appreciated, not required.
 
 Runnable stubs for every service are in [`examples/`](../examples). Start from them.
@@ -92,9 +95,25 @@ UI → server  {"type": "start"}  /  {"type": "stop"}
 
 Calibration: the UI shows a dot, sends `calibrate_point`, and waits up to 4 s
 for `calibrate_point_done` with the same `id` before moving on. Five dots
-(centre, then corners), then 20 s of normal reading.
+(centre, then corners) unless the provider lists its own, then 20 s of normal
+reading, then `finish_calibration`.
 
 In WS mode your process opens the camera itself, so the browser does not.
+
+### Lifecycle (both options)
+
+- The UI opens the camera **only if `needsCamera` is true**, and hands the
+  stream to `start(stream)`. It turns the camera fully off on pause, on a
+  break and at the end of a session, and calls `stop()` each time.
+- The provider started for calibration **keeps running into the study
+  session**: the UI doesn't stop and restart it in between, so nothing you
+  learned during calibration is dropped.
+- `calibrationPoints` (optional): your own dot list, in order, viewport 0–1.
+  The in-browser tracker from #2 can pass its 9 points here.
+- `finishCalibration()` is called **after** the 20 s reading baseline, so you
+  can use the baseline as part of calibration.
+- The UI keeps the state machine (thresholds, cooldown, the two-clip limit),
+  so a provider only reports the score; it doesn't decide lapses.
 Example: [`examples/gaze_ws_stub.py`](../examples/gaze_ws_stub.py).
 
 ### Option B: in-browser plugin (the production path)
@@ -212,17 +231,32 @@ Request: `{ "deck_id", "slide_index", "script": RescueScript, "variant": Variant
 }
 ```
 
-- `captions` must be sorted and cover the **exact spoken text**
-  (`hook + " " + script`), one entry per word, in seconds. The UI groups them
-  into 1–3-word captions and highlights the current word.
-- `at` is optional; without it the UI cuts to the b-roll when the term is spoken.
-- No `audio_url` ⇒ the UI falls back to the browser's voice (that's the mock).
+- **Captions:** one entry per whitespace-separated token of
+  `hook + " " + script`, in order, with punctuation attached to its word
+  (`"POV:"`, `"bestie,"`). `start` / `end` are seconds from t = 0 of the
+  audio file. The contract check fails if the count doesn't match the tokens.
+  The UI groups them into 1–3-word captions and highlights the current word.
+- **Audio:** MP3, served with HTTP Range support (`Accept-Ranges: bytes`).
+  The narration audio is the **whole** soundtrack: if you want a music bed,
+  mix it (ducked under the voice) into `audio_url`. The UI plays no separate
+  music.
+- No `audio_url`, or a file that fails to load ⇒ the UI narrates with the
+  browser's voice on the same captions (that's also the mock).
+- **B-roll:** `at` is when to cut to it, in seconds from t = 0 of the audio;
+  `duration` (seconds, default 2.6) is how long it stays. Without `at`, the UI
+  cuts to it for 2.6 s when the caption word matching `term` is spoken.
+- **Latency:** the UI asks for the current slide and two ahead, and starts the
+  shorter `depth: 2` clip for a slide as soon as its first clip starts playing.
+  The voice and pacing are part of the cache key, so each voice/pacing pair is
+  its own request.
 
 ### Library
 
 - `GET /library/gameplay` → `[{ "id", "type": "parkour|runner|kinetic-sand|marble|…", "energy": 0–1, "url": "/loops/p1.mp4" }]`
-  Portrait (9:16) MP4/WebM, muted, seamless. The UI starts each at a random point.
-- `GET /library/music` → `[{ "id", "tempo", "energy", "url" }]`
+  MP4/WebM, muted, seamless. 9:16, square or 5:4 all work: the gameplay area
+  is the bottom 45 % of the clip, which is about 5:4 on a desktop screen, and
+  the UI crops to fill it (centred). The UI starts each at a random point.
+- `GET /library/music` → optional, not called by the UI (music goes into `audio_url`).
 - `GET /voices` → `[{ "id": "hype", "label": "Hype narrator" }]` (ids the bandit may pick)
 
 Example: [`examples/services_stub.py`](../examples/services_stub.py) (media routes).
@@ -253,6 +287,22 @@ trigger (gaze|window|drowsy), rescue_in_row, rescues_so_far, recent_variant_ids,
 `quiz[]`, `clip_seconds`, `skipped`, `time_to_refocus_sec`, plus `context` and `variant_id`.
 The UI does **not** compute the reward; you do.
 
+Definitions the whole team uses:
+
+- **Time to refocus** (`time_to_refocus_sec`): from the moment the user is
+  back on the slide (clip and question over) to the state machine's next
+  *Focused*, in seconds; `null` if they never refocus. The clip is **not**
+  counted, so the proposal's "< 30 s" target applies as written.
+- **Skipped** (`skipped: true`): the user pressed *I'm back* / Esc during the
+  clip. The question still has to be answered to get back to the slide.
+- **Hidden tab:** if the lapse happens while the LockIn tab is hidden, the UI
+  plays a short sound, sends a notification (if allowed) and changes the tab
+  title, and only starts the clip once the tab is visible again. Clip time,
+  the 15 % cap and A_after therefore only count time the user could see.
+
+`POST /choose` may send a partial `variant`: the knobs you leave out keep
+their defaults (`20s · unhinged · memes · hype · 1.1 · runner · recap · 1 question`).
+
 `SessionLog.samples` is the 1 Hz trace `{t (s since start), score, state, slide_index}`.
 `SessionReview.score` must include `sustained_episode_median_sec`; the report
 also shows `on_task_share`, `lapses_per_30_min`, `time_to_refocus_median_sec`,
@@ -269,7 +319,7 @@ Example: [`examples/services_stub.py`](../examples/services_stub.py) (adaptive r
 
 ## Checking your integration
 
-1. `npm run dev`, open http://localhost:5173, press `` ` ``.
+1. `npm run dev`, open http://localhost:5180, press `` ` ``.
 2. Switch your module to `http` / `ws`, enter your URL, **Save**.
 3. **Run contract check.** It calls you with a known input and validates the
    output; problems are listed by field.

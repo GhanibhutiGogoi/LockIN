@@ -3,9 +3,9 @@ Stub services for the three HTTP teams, so each team can start from a working
 shape and replace the bodies with real models.
 
     pip install fastapi uvicorn python-multipart
-    uvicorn services_stub:content --port 8000
-    uvicorn services_stub:media   --port 8001
-    uvicorn services_stub:adaptive --port 8002
+    uvicorn services_stub:content --port 8010
+    uvicorn services_stub:media   --port 8011
+    uvicorn services_stub:adaptive --port 8012
 
 Then in the UI press ` and switch each module to "http".
 """
@@ -24,7 +24,7 @@ def make_app(title: str) -> FastAPI:
     app = FastAPI(title=title)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=["http://localhost:5180", "http://127.0.0.1:5180"],
         allow_methods=["*"],
         allow_headers=["*"],
     )

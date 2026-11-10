@@ -11,10 +11,11 @@ ships with a mock, so the whole product runs today without any of them.
 ```bash
 cd web
 npm install
-npm run dev        # app: http://localhost:5173 · pilot sign-up page: http://localhost:5173/pilot/
+npm run dev        # app: http://localhost:5180 · pilot sign-up page: http://localhost:5180/pilot/
 ```
 
-Try it: **Try the sample deck** on the home screen (or open your own PDF), then
+Try it: **Try the sample deck** on the home screen (or open your own PDF). The
+first time, a short consent screen says what is measured and kept. Then
 press `D` to simulate looking away. The edges glow, and ~8 s later a clip starts.
 Answer the question, then **Finish** for the report.
 

@@ -149,6 +149,8 @@ function chunkCaptions(words: CaptionWord[]): Chunk[] {
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, '');
+/** How long b-roll stays up when the media service gives no `duration`. */
+const BROLL_DEFAULT_SEC = 2.6;
 
 function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue: RescueUI; pack: RescuePack; loop?: GameplayLoop; muted: boolean; quiz: boolean }) {
   const { captions, durationSec } = pack.media;
@@ -192,7 +194,11 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
 
   useEffect(() => narration.current?.setMuted(muted), [muted]);
 
-  // cut to the key term when it is spoken
+  // b-roll with `at` is timed by the media service; the rest (and plain key-term
+  // highlights) cut in when the term is spoken
+  const clock = progress * durationSec;
+  const timed = quiz ? undefined : pack.media.broll.find((b) => b.at !== undefined && clock >= b.at && clock < b.at + (b.duration ?? BROLL_DEFAULT_SEC));
+
   useEffect(() => {
     if (wordIdx < 0) return;
     const w = norm(captions[wordIdx]?.word ?? '');
@@ -200,13 +206,14 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
     if (hit) {
       setTerm(hit.term);
       if (termTimer.current) clearTimeout(termTimer.current);
-      termTimer.current = window.setTimeout(() => setTerm(null), 2600);
+      termTimer.current = window.setTimeout(() => setTerm(null), BROLL_DEFAULT_SEC * 1000);
     }
   }, [wordIdx, captions, pack.script.keyTerms]);
 
   const chunkIdx = chunks.findIndex((c) => wordIdx >= c.from && wordIdx <= c.to);
   const chunk = chunkIdx >= 0 ? chunks[chunkIdx] : null;
-  const broll = term ? pack.media.broll.find((b) => norm(b.term) === norm(term)) : undefined;
+  const broll = timed ?? (term ? pack.media.broll.find((b) => b.at === undefined && norm(b.term) === norm(term)) : undefined);
+  const emphasis = timed?.term ?? term;
   const slide = deck.slides[pack.slideIndex];
 
   return (
@@ -223,7 +230,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
             filter: quiz ? 'brightness(0.35)' : undefined,
           }}
         >
-          <SlideView deck={deck} slide={slide} emphasis={term} shadow={false} />
+          <SlideView deck={deck} slide={slide} emphasis={emphasis} shadow={false} />
         </div>
         {broll && !quiz ? (
           broll.kind === 'video' ? (
@@ -287,7 +294,7 @@ function Quiz({ pack, rescue }: { pack: RescuePack; rescue: RescueUI }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!answer) {
+      if (!answer && q) {
         const n = Number(e.key);
         if (n >= 1 && n <= q.options.length) {
           e.preventDefault();
@@ -310,6 +317,8 @@ function Quiz({ pack, rescue }: { pack: RescuePack; rescue: RescueUI }) {
   useEffect(() => {
     if (countdown !== null && countdown <= 0) finishRescue();
   }, [countdown]);
+
+  if (!q) return null; // the engine only enters the quiz with questions; never crash on a bad pack
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col justify-center px-5 pb-6 pt-16">

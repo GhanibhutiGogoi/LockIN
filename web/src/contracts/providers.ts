@@ -48,13 +48,19 @@ export interface AttentionProvider {
   /** Emit ~10 Hz. The UI smooths, applies window focus, and runs the state machine. */
   onSample(cb: (s: FocusSample) => void): Unsubscribe;
   onStatus?(cb: (status: AttentionStatus, detail?: string) => void): Unsubscribe;
+  /**
+   * Calibration dots, in order (0–1 of the viewport). Omit to use the UI's
+   * five-dot default. The provider keeps running from calibration into the
+   * study session, so calibration state is never dropped.
+   */
+  readonly calibrationPoints?: CalibrationPoint[];
   /** Calibration: the UI shows a dot at `point`, then awaits this promise before moving on. */
   calibratePoint?(point: CalibrationPoint): Promise<void>;
-  /** Called after the 20 s normal-reading baseline. */
+  /** Called once the 20 s normal-reading baseline after the dots is over. */
   finishCalibration?(): Promise<void>;
   /** "Were you focused just now?" probe answer — use it to tune per-user detection. */
   reportProbe?(t: number, userSaysFocused: boolean): void;
-  /** True if the provider needs a camera stream from the UI. */
+  /** True if the provider needs a camera stream from the UI. The UI opens the camera only then. */
   readonly needsCamera: boolean;
 }
 

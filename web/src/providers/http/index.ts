@@ -20,6 +20,7 @@ import type {
   Variant,
   VariantChoice,
 } from '../../contracts/types';
+import { DEFAULT_VARIANT } from '../../contracts/defaults';
 import { assertContract, checkChoice, checkDeck, checkMedia, checkReview, checkScript } from '../../contracts/validate';
 import { call, resolveUrl } from './client';
 
@@ -75,7 +76,7 @@ export class HttpMediaProvider implements MediaProvider {
     const media = await call<RescueMedia>(this.base, '/media', { body: args, timeoutMs: 60_000 });
     media.audioUrl = resolveUrl(this.base, media.audioUrl);
     media.broll = (media.broll ?? []).map((b) => ({ ...b, url: resolveUrl(this.base, b.url)! }));
-    return assertContract('Video · POST /media', media, checkMedia);
+    return assertContract('Video · POST /media', media, (m) => checkMedia(m, `${args.script.hook} ${args.script.script}`));
   }
   async listGameplayLoops(): Promise<GameplayLoop[]> {
     const loops = await call<GameplayLoop[]>(this.base, '/library/gameplay');
@@ -101,6 +102,8 @@ export class HttpAdaptiveProvider implements AdaptiveProvider {
   }
   async chooseVariant(ctx: RescueContext): Promise<VariantChoice> {
     const c = await call<VariantChoice>(this.base, '/choose', { body: { context: ctx }, timeoutMs: 1500 });
+    // a partial variant keeps the defaults for the knobs it leaves out
+    if (c?.variant && typeof c.variant === 'object') c.variant = { ...DEFAULT_VARIANT, ...c.variant };
     return assertContract('Personal AI · POST /choose', c, checkChoice);
   }
   reportOutcome(o: RescueOutcome) {

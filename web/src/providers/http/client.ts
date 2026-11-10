@@ -18,10 +18,11 @@ export async function call<T>(
   const url = new URL(path.replace(/^\//, ''), base.endsWith('/') ? base : base + '/').toString();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 20_000);
+  const method = init.method ?? (init.body !== undefined || init.form ? 'POST' : 'GET');
   let res: Response;
   try {
     res = await fetch(url, {
-      method: init.method ?? (init.body || init.form ? 'POST' : 'GET'),
+      method,
       headers: init.form ? undefined : { 'Content-Type': 'application/json' },
       body: init.form ?? (init.body !== undefined ? JSON.stringify(snakify(init.body)) : undefined),
       signal: ctrl.signal,
@@ -39,7 +40,7 @@ export async function call<T>(
     } catch {
       /* ignore */
     }
-    throw new ServiceError(`${init.method ?? 'GET'} ${url} returned ${res.status}${detail ? `: ${detail}` : ''}`, res.status);
+    throw new ServiceError(`${method} ${url} returned ${res.status}${detail ? `: ${detail}` : ''}`, res.status);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();

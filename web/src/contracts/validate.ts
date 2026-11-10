@@ -67,7 +67,14 @@ export function checkScript(s: Partial<RescueScript>): Problems {
   return p;
 }
 
-export function checkMedia(m: Partial<RescueMedia>): Problems {
+/** Caption tokens for a script: one per whitespace-separated token, punctuation attached. */
+export const captionTokens = (spokenText: string) => spokenText.split(/\s+/).filter(Boolean);
+
+/**
+ * @param spokenText `hook + " " + script`. When given, the caption count must
+ * match its whitespace tokens one for one.
+ */
+export function checkMedia(m: Partial<RescueMedia>, spokenText?: string): Problems {
   const p: Problems = [];
   need(p, Array.isArray(m.captions) && m.captions.length > 0, 'media.captions must be a non-empty array');
   need(p, isNum(m.durationSec) && m.durationSec > 0, 'media.durationSec (duration_sec) must be > 0');
@@ -80,8 +87,17 @@ export function checkMedia(m: Partial<RescueMedia>): Problems {
       break;
     }
   }
+  if (spokenText !== undefined && Array.isArray(m.captions)) {
+    const want = captionTokens(spokenText).length;
+    need(p, m.captions.length === want, `media.captions has ${m.captions.length} entries; hook + " " + script has ${want} whitespace tokens (one caption per token)`);
+  }
   if (m.audioUrl !== undefined) need(p, isStr(m.audioUrl), 'media.audioUrl must be a string URL');
   need(p, Array.isArray(m.broll ?? []), 'media.broll must be an array');
+  (Array.isArray(m.broll) ? m.broll : []).forEach((b, i) => {
+    need(p, isStr(b.term) && isStr(b.url), `broll[${i}] needs term and url`);
+    if (b.at !== undefined) need(p, isNum(b.at) && b.at >= 0, `broll[${i}].at must be seconds ≥ 0`);
+    if (b.duration !== undefined) need(p, isNum(b.duration) && b.duration > 0, `broll[${i}].duration must be seconds > 0`);
+  });
   return p;
 }
 
@@ -95,7 +111,14 @@ export function checkSample(s: Partial<FocusSample>): Problems {
 
 export function checkChoice(c: Partial<VariantChoice>): Problems {
   const p: Problems = [];
-  need(p, !!c.variant && isStr(c.variant.id), 'choice.variant.id must be a string');
+  const v = c.variant;
+  need(p, !!v && isStr(v.id), 'choice.variant.id must be a string');
+  if (v) {
+    need(p, [20, 40, 60].includes(v.targetSeconds as number), 'choice.variant.targetSeconds (target_seconds) must be 20, 40 or 60');
+    need(p, isNum(v.pacing) && v.pacing > 0, 'choice.variant.pacing must be a number > 0');
+    need(p, [0, 1, 2].includes(v.quizCount as number), 'choice.variant.quizCount (quiz_count) must be 0, 1 or 2');
+    need(p, isStr(v.voiceId) && isStr(v.gameplayType), 'choice.variant.voiceId / gameplayType must be strings');
+  }
   need(p, typeof c.isHoldout === 'boolean', 'choice.isHoldout (is_holdout) must be a boolean');
   return p;
 }

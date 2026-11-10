@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { requestCamera } from '../lib/camera';
 import { simulator } from '../providers/mock/attention';
 import { registry } from '../providers/registry';
-import { dismissBreak, endBreak, endSession, onSlideChange, startSession, takeBreak, togglePause } from '../session/engine';
+import { dismissBreak, endBreak, endSession, enterStudy, onSlideChange, takeBreak, togglePause } from '../session/engine';
 import { actions, useApp, useDeck } from '../store';
+import { CONSENT_VERSION, ConsentScreen } from './ConsentScreen';
 import { FocusGauge } from './FocusGauge';
 import { Icon } from './Icon';
 import { IntegrationsButton } from './IntegrationsPanel';
@@ -20,20 +20,13 @@ export function StudyScreen() {
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<number | null>(null);
   const slide = deck.slides[slideIndex];
+  const consented = useApp((s) => s.consent === CONSENT_VERSION);
 
-  // no setup page: the browser's own prompt asks for the camera, and a "no" just means app switches only
+  // After consent: the camera (only if the tracker needs it) and the session.
+  // enterStudy is single-flight, and resumes a session paused for recalibration.
   useEffect(() => {
-    void (async () => {
-      if (useApp.getState().camera === 'asking') return; // a second mount while the prompt is open: the first one starts the session
-      if (useApp.getState().camera === 'off') {
-        useApp.setState({ camera: 'asking' });
-        const status = await requestCamera();
-        useApp.setState({ camera: status });
-        if (status !== 'on') actions.toast('No camera, so LockIn will only notice when you switch apps.');
-      }
-      await startSession();
-    })();
-  }, []);
+    if (consented) void enterStudy();
+  }, [consented]);
 
   useEffect(() => {
     onSlideChange(slideIndex);
@@ -90,7 +83,9 @@ export function StudyScreen() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (useApp.getState().rescue || useApp.getState().settingsOpen || e.metaKey || e.ctrlKey || e.altKey) return;
+      const st = useApp.getState();
+      // a break has its own buttons: P must not restart tracking under the countdown
+      if (st.rescue || st.settingsOpen || st.breakCard || st.consent !== CONSENT_VERSION || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
       if (target.closest('input, textarea, select, [contenteditable]')) return;
       const k = e.key;
@@ -112,6 +107,8 @@ export function StudyScreen() {
   const quiet = idle && state === 'focused' && !confirmEnd;
   // drifting doesn't call the toolbar: the edge glow is the only signal, so the slide stays clean
   const barHidden = !barAwake && !confirmEnd;
+
+  if (!consented) return <ConsentScreen />;
 
   return (
     <div className="relative h-full overflow-hidden bg-desk" data-study>
@@ -167,14 +164,23 @@ function FinishPopover({ onCancel }: { onCancel: () => void }) {
   const elapsed = useApp((s) => s.live.elapsed);
   const m = Math.floor(elapsed / 60);
   const sec = Math.floor(elapsed % 60);
+  const [busy, setBusy] = useState(false);
+  const finish = async () => {
+    setBusy(true);
+    try {
+      await endSession();
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div className="rise absolute top-[calc(100%+8px)] right-0 z-40 w-72 rounded-2xl bg-sheet p-5 shadow-[var(--shadow-float)]" role="dialog" aria-label="End this session">
       <p className="text-[17px] font-semibold">
         End after <span className="num">{m}:{sec.toString().padStart(2, '0')}</span>?
       </p>
       <div className="mt-4 flex gap-2">
-        <button type="button" className="btn btn-primary btn-sm flex-1" onClick={() => void endSession()} autoFocus>
-          See my report
+        <button type="button" className="btn btn-primary btn-sm flex-1" onClick={() => void finish()} disabled={busy} aria-busy={busy} autoFocus>
+          {busy ? 'Making your report…' : 'See my report'}
         </button>
         <button type="button" className="btn btn-quiet btn-sm" onClick={onCancel}>
           Keep going
@@ -362,7 +368,7 @@ function BreakCard({ reason, until }: { reason: 'repeated' | 'rescueCap'; until:
                 : 'Clips have taken over 15% of this session. A five-minute walk beats another one.'}
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-2">
-              <button type="button" className="btn btn-primary btn-lg" onClick={() => takeBreak(5)} autoFocus>
+              <button type="button" className="btn btn-primary btn-lg" onClick={() => void takeBreak(5)} autoFocus>
                 Take 5 minutes
               </button>
               <button type="button" className="btn btn-quiet btn-lg" onClick={dismissBreak}>
@@ -379,7 +385,7 @@ function BreakCard({ reason, until }: { reason: 'repeated' | 'rescueCap'; until:
               {Math.floor(left / 60000)}:{Math.floor((left % 60000) / 1000).toString().padStart(2, '0')}
             </p>
             <p className="mt-4 text-[17px] text-graphite">{done ? 'Ready when you are.' : 'Camera off. Stand up, get water, look far away.'}</p>
-            <button type="button" className={`btn btn-lg mt-8 ${done ? 'btn-primary' : 'btn-quiet'}`} onClick={endBreak} autoFocus={done}>
+            <button type="button" className={`btn btn-lg mt-8 ${done ? 'btn-primary' : 'btn-quiet'}`} onClick={() => void endBreak()} autoFocus={done}>
               {done ? 'Back to the slides' : 'Back early'}
             </button>
           </>

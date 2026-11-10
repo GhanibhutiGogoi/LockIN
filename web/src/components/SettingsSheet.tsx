@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SlangLevel } from '../contracts/types';
+import { isRunning, pauseSession } from '../session/engine';
 import { configForSensitivity } from '../session/machine';
 import { actions, useApp, type Theme } from '../store';
 import { Icon } from './Icon';
@@ -148,7 +149,9 @@ export function SettingsSheet() {
               <button
                 type="button"
                 className="btn btn-quiet justify-start"
-                onClick={() => {
+                onClick={async () => {
+                  // mid-session: pause (tracking off, session kept); the study screen resumes it afterwards
+                  if (isRunning()) await pauseSession();
                   actions.setCalibrated(false);
                   close();
                   actions.go('setup');

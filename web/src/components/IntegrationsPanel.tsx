@@ -204,7 +204,7 @@ async function contractCheck(team: ServiceTeam): Promise<string[]> {
   if (team === 'media') {
     const script = await new (await import('../providers/mock/content')).MockContentProvider().getScript({ deck: DEMO_DECK, slide: DEMO_DECK.slides[2], variant: SAMPLE_VARIANT, depth: 1 });
     const m = await registry.media.renderMedia({ deckId: DEMO_DECK.id, slideIndex: 2, script, variant: SAMPLE_VARIANT });
-    const problems = checkMedia(m);
+    const problems = checkMedia(m, `${script.hook} ${script.script}`);
     if (problems.length) throw new ContractError('Video', problems);
     const loops = await registry.media.listGameplayLoops();
     return [`${m.captions.length} caption words over ${m.durationSec.toFixed(1)} s`, m.audioUrl ? `audio: ${m.audioUrl}` : 'no audioUrl (browser voice fallback)', `${m.broll.length} b-roll clip(s), ${loops.length} gameplay loop(s)`];

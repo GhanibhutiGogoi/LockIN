@@ -107,8 +107,13 @@ export interface BrollClip {
   /** Video (mp4/webm) or image URL. */
   url: string;
   kind: 'video' | 'image';
-  /** When in the narration (seconds) to cut to it. If omitted, UI uses the caption time of `term`. */
+  /**
+   * When in the narration (seconds from t = 0 of the audio) to cut to it. If
+   * omitted, the UI cuts to it when the caption word matching `term` is spoken.
+   */
   at?: number;
+  /** How long to show it, in seconds. Default 2.6. Only used together with `at`. */
+  duration?: number;
 }
 
 export interface RescueMedia {
@@ -254,7 +259,10 @@ export interface RescueOutcome {
   skipped: boolean;
   /** Per question: chosen index, correct? */
   quiz: { questionIndex: number; chosen: number; correct: boolean }[];
-  /** Seconds from lapse to Focused again (null if never). */
+  /**
+   * Seconds from returning to the slide (clip and question over) to Focused
+   * again; null if the user never refocused. The clip itself is not counted.
+   */
   timeToRefocusSec: number | null;
   /** Share of the 60 s after returning to the slide spent Focused (A_after). */
   attentionAfter: number | null;

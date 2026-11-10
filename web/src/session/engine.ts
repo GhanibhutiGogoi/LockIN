@@ -2,20 +2,35 @@
  * Session runtime: wires the attention provider, window focus, the pure state
  * machine, rescue orchestration and logging together. UI components call the
  * exported functions; they never touch providers directly.
+ *
+ * The engine also owns the camera and the attention provider's lifetime: the
+ * camera opens only when the provider needs it, goes off whenever tracking
+ * stops (pause, break, end of session), and a provider started for
+ * calibration keeps running into the session.
  */
+import type { AttentionProvider } from '../contracts/providers';
 import type { FocusLogEntry, FocusSample, LapseTrigger, RescueContext, RescueOutcome, SessionConfig, SessionLog, Variant, VariantChoice } from '../contracts/types';
-import { getStream, releaseCamera, requestCamera } from '../lib/camera';
+import { notifyComeBack, playCue, primeCue, whenVisible } from '../lib/callback';
+import { getStream, releaseCamera, requestCamera, type CameraStatus } from '../lib/camera';
 import { devlog } from '../lib/devlog';
 import { uid } from '../lib/storage';
 import { registry } from '../providers/registry';
-import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion } from '../store';
-import { DEFAULT_CONFIG, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
+import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI } from '../store';
+import { DEFAULT_CONFIG, configForSensitivity, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
 import { focusShare, scoreSession } from './metrics';
-import { DEFAULT_VARIANT, getPack, prefetch, setWarmVariant } from './packs';
+import { DEFAULT_VARIANT, getPack, prefetch, prefetchDeeper, setWarmVariant } from './packs';
 
 const TICK_MS = 100;
 const SMOOTH_WINDOW_MS = 1000;
 const REWARD_WINDOW_SEC = 60;
+
+interface Pending {
+  outcome: RescueOutcome;
+  /** session seconds when the user was back on the slide */
+  returnedAtSec: number;
+  /** ms timestamp of the same moment; time to refocus counts from here */
+  returnedAt: number;
+}
 
 interface Runtime {
   sessionId: string;
@@ -24,7 +39,7 @@ interface Runtime {
   samples: { t: number; score: number; eyesOpen: number }[];
   log: FocusLogEntry[];
   outcomes: RescueOutcome[];
-  pending: { outcome: RescueOutcome; returnedAtSec: number; lapseAt: number }[];
+  pending: Pending[];
   recentVariants: string[];
   questions: ReviewQuestion[];
   profileMemo?: string;
@@ -35,23 +50,103 @@ interface Runtime {
 }
 
 let rt: Runtime | null = null;
+/** In-flight enterStudy(), so a double mount can't start two sessions. */
+let entering: Promise<void> | null = null;
+/** endSession() is running (its POST can take up to 60 s). */
+let ending = false;
 
 const sessionSec = (now = Date.now()) => (rt ? (now - rt.machine.sessionStart) / 1000 : 0);
 
+// ───────────────────────── camera + provider ownership ─────────────────────────
+
+let liveProvider: AttentionProvider | null = null;
+let providerStarting: Promise<void> | null = null;
+
+/** Open the camera if, and only if, the active attention provider needs it. */
+export async function ensureCamera(): Promise<CameraStatus> {
+  const s = useApp.getState();
+  if (!registry.attention.needsCamera) {
+    if (s.camera === 'paused') useApp.setState({ camera: 'off' });
+    return useApp.getState().camera;
+  }
+  if (s.camera === 'on' && getStream()) return 'on';
+  useApp.setState({ camera: 'asking' });
+  const status = await requestCamera();
+  useApp.setState({ camera: status });
+  return status;
+}
+
+/** Camera fully off (the hardware light goes out). */
+function cameraOff(next: 'off' | 'paused') {
+  releaseCamera();
+  const c = useApp.getState().camera;
+  if (c === 'on' || (next === 'off' && c === 'paused')) useApp.setState({ camera: next });
+}
+
+/** Start the active attention provider unless it is already running. Single-flight. */
+export function ensureAttention(): Promise<void> {
+  const p = registry.attention;
+  if (liveProvider === p) return Promise.resolve();
+  if (providerStarting) return providerStarting;
+  providerStarting = (async () => {
+    try {
+      if (liveProvider) await stopProvider();
+      await p.start(p.needsCamera ? getStream() : null);
+      liveProvider = p;
+    } finally {
+      providerStarting = null;
+    }
+  })();
+  return providerStarting;
+}
+
+export async function stopProvider() {
+  if (providerStarting) await providerStarting.catch(() => {});
+  const p = liveProvider;
+  liveProvider = null;
+  if (p) await p.stop().catch(() => {});
+}
+
 // ───────────────────────── lifecycle ─────────────────────────
 
-export async function startSession() {
+/**
+ * Study screen mounted: start a session, or pick the running one back up
+ * (e.g. after recalibrating mid-session). Safe to call twice.
+ */
+export function enterStudy(): Promise<void> {
+  if (entering) return entering;
+  entering = (async () => {
+    try {
+      if (rt) {
+        if (rt.machine.state === 'paused' && !useApp.getState().breakCard) await resume();
+        return;
+      }
+      primeCue();
+      const status = await ensureCamera();
+      if (registry.attention.needsCamera && status !== 'on') actions.toast('No camera, so LockIn will only notice when you switch apps.');
+      await startSession();
+    } finally {
+      entering = null;
+    }
+  })();
+  return entering;
+}
+
+async function startSession() {
   if (rt) await teardown();
   const s = useApp.getState();
   const now = Date.now();
-  let cfg: SessionConfig = { ...DEFAULT_CONFIG };
+  let cfg: SessionConfig;
   try {
-    cfg = { ...cfg, ...(await registry.adaptive.getSessionConfig(s.userId, s.settings)) };
-    // the user's own choice always wins over the model
-    cfg.nudgeOnly = !!s.settings.nudgeOnly;
+    cfg = { ...DEFAULT_CONFIG, ...(await registry.adaptive.getSessionConfig(s.userId, s.settings)) };
   } catch {
-    actions.toast('Personal AI service is unreachable, using default timing.', 'error');
+    // no model: the user's own sensitivity and cooldown still apply
+    cfg = { ...configForSensitivity(s.settings.sensitivity), cooldownSec: s.settings.cooldownSec ?? DEFAULT_CONFIG.cooldownSec };
+    actions.toast('Personal AI service is unreachable, using your own settings.', 'error');
   }
+  // the user's own choice always wins over the model
+  cfg.nudgeOnly = !!s.settings.nudgeOnly;
+
   let profileMemo: string | undefined;
   try {
     profileMemo = await registry.adaptive.getProfileMemo(s.userId);
@@ -78,12 +173,14 @@ export async function startSession() {
   useApp.setState({ live: { ...emptyLive(), state: 'focused', startedAt: now, score: 80, effective: 80 }, rescue: null, breakCard: null });
 
   await startAttention();
+  if (!rt) return;
   rt.timer = window.setInterval(tick, TICK_MS);
   prefetch(currentDeck(), useApp.getState().slideIndex, profileMemo);
 }
 
 async function startAttention() {
   if (!rt) return;
+  unsubscribe(); // never subscribe twice
   const provider = registry.attention;
   rt.unsub.push(provider.onSample(onSample));
   if (provider.onStatus) {
@@ -94,7 +191,7 @@ async function startAttention() {
     );
   }
   try {
-    await provider.start(provider.needsCamera ? getStream() : null);
+    await ensureAttention();
     devlog.push({ team: 'attention', level: 'ok', label: `started ${provider.name}` });
   } catch (err) {
     devlog.push({ team: 'attention', level: 'error', label: 'start failed', detail: (err as Error).message });
@@ -102,58 +199,66 @@ async function startAttention() {
   }
 }
 
-async function stopAttention() {
+function unsubscribe() {
   if (!rt) return;
   rt.unsub.forEach((f) => f());
   rt.unsub = [];
-  try {
-    await registry.attention.stop();
-  } catch {
-    /* ignore */
-  }
+}
+
+async function stopAttention() {
+  unsubscribe();
+  await stopProvider();
 }
 
 async function teardown() {
   if (!rt) return;
   if (rt.timer !== null) clearInterval(rt.timer);
+  rt.timer = null;
   await stopAttention();
   if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
   document.title = rt.titleBefore;
 }
 
 export async function endSession() {
-  if (!rt) return;
+  if (!rt || ending) return;
+  ending = true;
   const r = rt;
-  await teardown();
-  const now = Date.now();
-  // Flush outcomes whose 60 s window hasn't closed: use what we have.
-  for (const p of r.pending) finalizeOutcome(p, true);
-  r.pending = [];
-
-  const deck = currentDeck();
-  const log: SessionLog = {
-    sessionId: r.sessionId,
-    userId: useApp.getState().userId,
-    deckId: deck.id,
-    startedAt: r.machine.sessionStart,
-    endedAt: now,
-    samples: r.log,
-    rescues: r.outcomes,
-  };
-  let review;
   try {
-    review = await registry.adaptive.endSession(log);
-  } catch {
-    review = { score: scoreSession(log.samples, log.rescues) };
-    actions.toast('Personal AI service is unreachable. The report uses local numbers only.', 'error');
+    await teardown();
+    cameraOff('off');
+    const now = Date.now();
+    // Flush outcomes whose 60 s window hasn't closed: use what we have.
+    for (const p of r.pending) finalizeOutcome(p, true);
+    r.pending = [];
+
+    const deck = currentDeck();
+    const log: SessionLog = {
+      sessionId: r.sessionId,
+      userId: useApp.getState().userId,
+      deckId: deck.id,
+      startedAt: r.machine.sessionStart,
+      endedAt: now,
+      samples: r.log,
+      rescues: r.outcomes,
+    };
+    let review;
+    try {
+      review = await registry.adaptive.endSession(log);
+    } catch {
+      review = { score: scoreSession(log.samples, log.rescues) };
+      actions.toast('Personal AI service is unreachable. The report uses local numbers only.', 'error');
+    }
+    if (log.samples.length >= 30) actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
+    useApp.setState({ report: { deck, log, review, questions: r.questions }, live: emptyLive(), rescue: null, breakCard: null });
+    actions.go('report');
+  } finally {
+    if (rt === r) rt = null;
+    ending = false;
   }
-  rt = null;
-  if (log.samples.length >= 30) actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
-  useApp.setState({ report: { deck, log, review, questions: r.questions }, live: emptyLive(), rescue: null, breakCard: null });
-  actions.go('report');
 }
 
 export const isRunning = () => rt !== null;
+export const isEnding = () => ending;
 
 // ───────────────────────── input ─────────────────────────
 
@@ -217,7 +322,7 @@ function tick() {
     },
   });
 
-  // Browser fallback for snap-back: the tab title calls you back.
+  // Snap-back, part 1: the tab title calls you back (the cue and notification fire once, in startRescue).
   const away = !active && (m.state === 'lapse' || m.state === 'rescue');
   const want = away ? 'Come back to your slides · LockIn' : rt.titleBefore;
   if (document.title !== want) document.title = want;
@@ -233,8 +338,9 @@ function handle(e: MachineEvent) {
       void startRescue(e.trigger, e.depth as 1 | 2, e.rescueInRow);
       break;
     case 'refocused': {
+      // Time to refocus counts from the moment the user is back on the slide (clip and question over).
       const now = Date.now();
-      for (const p of rt.pending) if (p.outcome.timeToRefocusSec === null) p.outcome.timeToRefocusSec = Math.round((now - p.lapseAt) / 100) / 10;
+      for (const p of rt.pending) if (p.outcome.timeToRefocusSec === null) p.outcome.timeToRefocusSec = Math.round((now - p.returnedAt) / 100) / 10;
       break;
     }
     case 'suggestBreak':
@@ -266,12 +372,28 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: () => T): Promise<T
   return Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback()), ms))]).catch(() => fallback());
 }
 
+const hasQuiz = (r: RescueUI) => (r.pack?.script.quiz.length ?? 0) > 0 && (r.pack?.variant.quizCount ?? 1) > 0;
+
 async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: number) {
   if (!rt) return;
+  const owner = rt;
+  const lapseAt = Date.now();
+
+  // Snap-back, part 2: a clip in a hidden tab plays to nobody, and would count
+  // toward the rescue cap and A_after. Call the user back, and start the clip
+  // when they are here to see it.
+  if (document.hidden) {
+    playCue();
+    const closeNote = notifyComeBack();
+    devlog.push({ team: 'ui', level: 'info', label: 'lapse in a hidden tab: rescue held until the tab is visible' });
+    await whenVisible();
+    closeNote();
+    if (rt !== owner || rt.machine.state !== 'lapse') return;
+  }
+
   const s = useApp.getState();
   const deck = currentDeck();
   const slide = deck.slides[s.slideIndex];
-  const now = Date.now();
   const context: RescueContext = {
     userId: s.userId,
     deckId: deck.id,
@@ -287,14 +409,16 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   };
   const id = uid('r_');
   useApp.setState({
-    rescue: { id, phase: 'loading', trigger, depth, context, lapseAt: now, skipped: false, answers: [] },
+    rescue: { id, phase: 'loading', trigger, depth, context, lapseAt, skipped: false, answers: [] },
     live: { ...s.live, lapsesBySlide: depth === 1 ? { ...s.live.lapsesBySlide, [s.slideIndex]: (s.live.lapsesBySlide[s.slideIndex] ?? 0) + 1 } : s.live.lapsesBySlide },
   });
 
   const choice: VariantChoice = await withTimeout<VariantChoice>(registry.adaptive.chooseVariant(context), 1500, () => ({ variant: fallbackVariant(), isHoldout: false }));
+  // the user may have left (Esc) or the session ended while the choice was pending
+  if (rt !== owner || useApp.getState().rescue?.id !== id) return;
   let variant = choice.variant;
   if (!s.settings.roastsEnabled && variant.humourStyle === 'roasts') variant = { ...variant, humourStyle: 'memes' };
-  rt?.recentVariants.push(variant.id);
+  rt.recentVariants.push(variant.id);
   setWarmVariant(variant);
 
   if (choice.action === 'skip') {
@@ -302,19 +426,22 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
     act({ type: 'rescueStarted' });
     useApp.setState({ rescue: null });
     actions.toast('Eyes back on the slide.');
+    const now = Date.now();
     const outcome = makeOutcome(id, context, variant.id, choice.isHoldout, now, now, 0, false, []);
     act({ type: 'rescueFinished', clipMs: 0 });
-    rt?.pending.push({ outcome, returnedAtSec: sessionSec(), lapseAt: now });
+    rt.pending.push({ outcome, returnedAtSec: sessionSec(now), returnedAt: now });
     return;
   }
 
   try {
-    const pack = await getPack(deck, s.slideIndex, variant, depth, rt?.profileMemo);
-    if (useApp.getState().rescue?.id !== id) return; // user already left
+    const pack = await getPack(deck, s.slideIndex, variant, depth, rt.profileMemo);
+    if (rt !== owner || useApp.getState().rescue?.id !== id) return; // user already left
     act({ type: 'rescueStarted' });
     useApp.setState({ rescue: { ...useApp.getState().rescue!, phase: 'playing', pack, choice: { ...choice, variant }, startedAt: Date.now() } });
+    // if this one doesn't land, the shorter second clip should be ready
+    if (depth === 1) prefetchDeeper(deck, s.slideIndex, variant, rt.profileMemo);
   } catch (err) {
-    if (useApp.getState().rescue?.id !== id) return;
+    if (rt !== owner || useApp.getState().rescue?.id !== id) return;
     act({ type: 'rescueStarted' });
     useApp.setState({ rescue: { ...useApp.getState().rescue!, phase: 'error', choice: { ...choice, variant }, error: (err as Error).message, startedAt: Date.now() } });
   }
@@ -324,20 +451,35 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
 export function clipEnded() {
   const r = useApp.getState().rescue;
   if (!r || r.phase !== 'playing') return;
-  const hasQuiz = (r.pack?.script.quiz.length ?? 0) > 0 && (r.choice?.variant.quizCount ?? 1) > 0;
-  useApp.setState({ rescue: { ...r, clipEndedAt: Date.now(), phase: hasQuiz ? 'quiz' : r.phase } });
-  if (!hasQuiz) finishRescue();
+  if (hasQuiz(r)) useApp.setState({ rescue: { ...r, clipEndedAt: Date.now(), phase: 'quiz' } });
+  else {
+    useApp.setState({ rescue: { ...r, clipEndedAt: Date.now() } });
+    finishRescue();
+  }
 }
 
-/** "I'm back" / Esc: leave the clip now, skip is logged. */
+/**
+ * "I'm back" / Esc. During a clip this ends the clip and goes to the question:
+ * the question is required to exit (the proposal's guard against drifting on
+ * purpose), and the skip is still logged. Nothing has played while loading, and
+ * an error card has no question, so those return straight away.
+ */
 export function skipClip() {
   const r = useApp.getState().rescue;
-  if (!r) return;
-  if (r.phase === 'loading') {
-    // nothing played yet — treat as an immediate return
-    act({ type: 'rescueStarted' });
+  if (!r || r.phase === 'quiz') return;
+  if (r.phase === 'playing' && hasQuiz(r)) {
+    useApp.setState({ rescue: { ...r, skipped: true, clipEndedAt: Date.now(), phase: 'quiz' } });
+    return;
   }
-  useApp.setState({ rescue: { ...r, skipped: r.phase === 'playing' || r.phase === 'loading', clipEndedAt: r.clipEndedAt ?? Date.now() } });
+  leaveRescue();
+}
+
+/** Close the rescue now, whatever phase it is in (pause, or nothing to ask). */
+function leaveRescue() {
+  const r = useApp.getState().rescue;
+  if (!r) return;
+  if (r.phase === 'loading') act({ type: 'rescueStarted' }); // nothing played yet — an immediate return
+  useApp.setState({ rescue: { ...r, skipped: r.skipped || r.phase === 'playing' || r.phase === 'loading', clipEndedAt: r.clipEndedAt ?? Date.now() } });
   finishRescue();
 }
 
@@ -355,7 +497,7 @@ export function finishRescue() {
   const started = r.startedAt ?? now;
   const clipMs = Math.max(0, (r.clipEndedAt ?? now) - started);
   const outcome = makeOutcome(r.id, r.context, r.choice?.variant.id ?? 'none', r.choice?.isHoldout ?? false, started, r.clipEndedAt ?? now, clipMs / 1000, r.skipped, r.answers);
-  rt.pending.push({ outcome, returnedAtSec: sessionSec(now), lapseAt: r.lapseAt });
+  rt.pending.push({ outcome, returnedAtSec: sessionSec(now), returnedAt: now });
   r.pack?.script.quiz.slice(0, Math.max(1, r.pack.variant.quizCount)).forEach((q, i) => {
     rt!.questions.push({
       slideIndex: r.context.slideIndex,
@@ -404,7 +546,7 @@ function checkPending(nowSec: number) {
   due.forEach((p) => finalizeOutcome(p, false));
 }
 
-function finalizeOutcome(p: Runtime['pending'][number], partial: boolean) {
+function finalizeOutcome(p: Pending, partial: boolean) {
   if (!rt) return;
   p.outcome.attentionAfter = focusShare(rt.log, p.returnedAtSec, p.returnedAtSec + REWARD_WINDOW_SEC);
   rt.outcomes.push(p.outcome);
@@ -414,25 +556,33 @@ function finalizeOutcome(p: Runtime['pending'][number], partial: boolean) {
 
 // ───────────────────────── user controls ─────────────────────────
 
+/** Pause: tracking stops and the camera goes fully off. */
+async function pause() {
+  if (!rt || rt.machine.state === 'paused') return;
+  if (useApp.getState().rescue) leaveRescue();
+  act({ type: 'pause' });
+  await stopAttention();
+  cameraOff('paused');
+}
+
+async function resume() {
+  if (!rt || rt.machine.state !== 'paused') return;
+  if (useApp.getState().camera === 'paused' || registry.attention.needsCamera) await ensureCamera();
+  await startAttention();
+  act({ type: 'resume' });
+}
+
 export async function togglePause() {
-  if (!rt) return;
-  const s = useApp.getState();
-  if (rt.machine.state === 'paused') {
-    if (s.camera === 'paused') {
-      const status = await requestCamera();
-      useApp.setState({ camera: status === 'on' ? 'on' : status });
-    }
-    await startAttention();
-    act({ type: 'resume' });
-  } else {
-    if (s.rescue) skipClip();
-    act({ type: 'pause' });
-    await stopAttention();
-    if (s.camera === 'on') {
-      releaseCamera();
-      useApp.setState({ camera: 'paused' });
-    }
-  }
+  // a break has its own controls, and a session that is ending can't be resumed
+  if (!rt || ending || useApp.getState().breakCard) return;
+  if (rt.machine.state === 'paused') await resume();
+  else await pause();
+}
+
+/** Pause before leaving the study screen (recalibration); enterStudy() resumes it. */
+export async function pauseSession() {
+  if (!rt || ending) return;
+  await pause();
 }
 
 export function toggleNoteTaking() {
@@ -442,15 +592,17 @@ export function toggleNoteTaking() {
   useApp.setState({ live: { ...s.live, noteTakingUntil: on ? null : Date.now() + grace } });
 }
 
-export function takeBreak(minutes = 5) {
+/** A real break: tracking stops and the camera goes off, as the break card says. */
+export async function takeBreak(minutes = 5) {
+  if (!rt) return;
   useApp.setState({ breakCard: { reason: useApp.getState().breakCard?.reason ?? 'repeated', until: Date.now() + minutes * 60_000 } });
   act({ type: 'breakTaken' }); // resets the rescue streak and starts the cooldown
-  act({ type: 'pause' });
+  await pause();
 }
 
-export function endBreak() {
-  if (rt?.machine.state === 'paused') act({ type: 'resume' });
+export async function endBreak() {
   useApp.setState({ breakCard: null });
+  await resume();
 }
 
 export function dismissBreak() {

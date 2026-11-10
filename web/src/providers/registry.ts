@@ -32,9 +32,9 @@ export const TEAM_INFO: Record<ServiceTeam, { title: string; zh: string; owns: s
 const env = import.meta.env;
 const DEFAULTS: IntegrationConfig = {
   attention: { mode: env.VITE_ATTENTION_PROVIDER ?? 'mock', url: env.VITE_ATTENTION_WS_URL ?? 'ws://localhost:8765' },
-  content: { mode: env.VITE_CONTENT_PROVIDER ?? 'mock', url: env.VITE_CONTENT_URL ?? 'http://localhost:8000' },
-  media: { mode: env.VITE_MEDIA_PROVIDER ?? 'mock', url: env.VITE_MEDIA_URL ?? 'http://localhost:8001' },
-  adaptive: { mode: env.VITE_ADAPTIVE_PROVIDER ?? 'mock', url: env.VITE_ADAPTIVE_URL ?? 'http://localhost:8002' },
+  content: { mode: env.VITE_CONTENT_PROVIDER ?? 'mock', url: env.VITE_CONTENT_URL ?? 'http://localhost:8010' },
+  media: { mode: env.VITE_MEDIA_PROVIDER ?? 'mock', url: env.VITE_MEDIA_URL ?? 'http://localhost:8011' },
+  adaptive: { mode: env.VITE_ADAPTIVE_PROVIDER ?? 'mock', url: env.VITE_ADAPTIVE_URL ?? 'http://localhost:8012' },
 };
 const KEY = 'lockin.integrations';
 

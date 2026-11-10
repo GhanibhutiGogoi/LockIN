@@ -29,6 +29,8 @@ export class WsAttentionProvider implements AttentionProvider {
   }
 
   start(): Promise<void> {
+    // a second start() must not leave the first socket streaming into the subscribers
+    this.closeSocket();
     this.emit('starting');
     return new Promise((resolve, reject) => {
       let ws: WebSocket;
@@ -40,34 +42,49 @@ export class WsAttentionProvider implements AttentionProvider {
         return;
       }
       this.ws = ws;
-      const timer = setTimeout(() => {
-        this.emit('error', `No answer from ${this.url}`);
-        reject(new Error(`No answer from ${this.url}. Is the gaze service running?`));
-      }, 4000);
+      const fail = (message: string) => {
+        clearTimeout(timer);
+        // drop the socket entirely, so a late open can't switch tracking on after the error
+        if (this.ws === ws) this.closeSocket();
+        this.emit('error', message);
+        reject(new Error(message));
+      };
+      const timer = setTimeout(() => fail(`No answer from ${this.url}. Is the gaze service running?`), 4000);
       ws.onopen = () => {
         clearTimeout(timer);
         ws.send(JSON.stringify({ type: 'start' }));
         this.emit('running');
         resolve();
       };
-      ws.onerror = () => {
-        clearTimeout(timer);
-        this.emit('error', `Could not connect to ${this.url}`);
-        reject(new Error(`Could not connect to ${this.url}`));
+      ws.onerror = () => fail(`Could not connect to ${this.url}`);
+      ws.onclose = () => {
+        if (this.ws === ws) this.emit('stopped');
       };
-      ws.onclose = () => this.emit('stopped');
-      ws.onmessage = (ev) => this.onMessage(ev.data);
+      ws.onmessage = (ev) => {
+        if (this.ws === ws) this.onMessage(ev.data);
+      };
     });
   }
 
   async stop() {
     try {
-      this.ws?.send(JSON.stringify({ type: 'stop' }));
+      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'stop' }));
     } catch {
       /* ignore */
     }
-    this.ws?.close();
+    this.closeSocket();
+  }
+
+  private closeSocket() {
+    const ws = this.ws;
     this.ws = null;
+    if (!ws) return;
+    ws.onopen = ws.onerror = ws.onmessage = ws.onclose = null;
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
   }
 
   onSample(cb: (s: FocusSample) => void): Unsubscribe {
@@ -112,7 +129,8 @@ export class WsAttentionProvider implements AttentionProvider {
       this.emit(msg.status as AttentionStatus, msg.detail as string | undefined);
       return;
     }
-    if (msg.type === 'calibratePointDone') {
+    // camelize renames keys only: the value of `type` stays as the server sent it
+    if (msg.type === 'calibrate_point_done') {
       const id = String(msg.id);
       this.pending.get(id)?.();
       this.pending.delete(id);

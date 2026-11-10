@@ -78,6 +78,8 @@ interface AppState {
   slideIndex: number;
   camera: CameraStatus;
   calibrated: boolean;
+  /** Version of the consent screen the user agreed to, or null. */
+  consent: string | null;
   live: Live;
   rescue: RescueUI | null;
   breakCard: { reason: 'repeated' | 'rescueCap'; until: number | null } | null;
@@ -124,6 +126,7 @@ export const useApp = create<AppState>(() => ({
   slideIndex: 0,
   camera: 'off',
   calibrated: load('lockin.calibrated', false),
+  consent: load<string | null>('lockin.consent', null),
   live: emptyLive(),
   rescue: null,
   breakCard: null,
@@ -151,6 +154,10 @@ export const actions = {
   setCalibrated(v: boolean) {
     useApp.setState({ calibrated: v });
     save('lockin.calibrated', v);
+  },
+  setConsent(version: string | null) {
+    useApp.setState({ consent: version });
+    save('lockin.consent', version);
   },
   addDeck(deck: Deck) {
     const decks = [deck, ...useApp.getState().decks.filter((d) => d.id !== deck.id)];
