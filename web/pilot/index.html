@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LockIn pilot</title>
+    <meta name="description" content="LockIn turns the slide you drifted from into a short clip and one question. Students can apply for a place in the three-week pilot." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Jost:wght@700&family=Karla:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./pilot.css" />
+  </head>
+  <body>
+    <header class="nav">
+      <div class="container nav__row">
+        <a class="wordmark" href="#top" aria-label="LockIn, back to the top">LockIn</a>
+        <nav class="nav__links" aria-label="Page">
+          <a href="#session">A session</a>
+          <a href="#camera">The camera</a>
+          <a class="btn" href="#join">Join the pilot</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="container hero__grid">
+          <div class="hero__text">
+            <h1 id="hero-title">Drift, and the slide becomes a clip</h1>
+            <p class="lead">We need students to test LockIn through three weeks of real revision.</p>
+            <div class="hero__actions">
+              <a class="btn btn--primary" href="#join">Apply for a place</a>
+              <a class="btn" href="#session">See a session</a>
+            </div>
+          </div>
+          <figure class="shot" style="margin: 0">
+            <div class="hero__shot" data-slot="hero" data-kind="product" data-alt="A LockIn clip: the slide on top, gameplay below, the caption on the split">
+              <img src="./screens/clip.png" width="980" height="1736" alt="A LockIn clip: the biology slide on glycolysis above a gameplay loop, a bold caption across the middle with the spoken word highlighted" fetchpriority="high" />
+            </div>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section--tight" aria-label="The pilot in numbers">
+        <div class="container">
+          <div class="figures">
+            <div><b>15 to 20</b><span class="label">Places in the pilot</span></div>
+            <div><b>3 weeks</b><span class="label">Of revising with your own slides</span></div>
+            <div><b>8 seconds</b><span class="label">Looking away before a clip starts</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="session" aria-labelledby="session-title">
+        <div class="container">
+          <div class="head-split">
+            <h2 id="session-title">Slide, clip, one question</h2>
+            <p class="lead">Your own slides. LockIn only steps in when your focus slips.</p>
+          </div>
+          <div class="coded">
+            <article>
+              <div class="slot--study" data-slot="study" data-kind="product" data-alt="A lecture slide open in LockIn, key terms highlighted">
+                <img src="./screens/study.png" width="2112" height="1818" alt="A biology slide on glycolysis open in LockIn, with 'glycolysis' and 'cytoplasm' highlighted" loading="lazy" />
+              </div>
+              <div class="coded__fill fill--study">
+                <h3>Study</h3>
+                <p>You read. Nothing moves.</p>
+              </div>
+            </article>
+            <article>
+              <div class="slot--clip" data-slot="clip" data-kind="product" data-alt="The rescue clip: slide on top, gameplay below, captions on the split">
+                <img src="./screens/clip-2.png" width="980" height="1736" alt="Later in the same clip: a new caption over the gameplay loop" loading="lazy" />
+              </div>
+              <div class="coded__fill fill--clip">
+                <h3>Clip</h3>
+                <p>Look away and the slide comes back as a clip.</p>
+              </div>
+            </article>
+            <article>
+              <div class="slot--question" data-slot="question" data-kind="product" data-alt="The one quiz question after a clip, answered">
+                <img src="./screens/question.png" width="980" height="1736" alt="A quiz question about glycolysis with the right answer marked" loading="lazy" />
+              </div>
+              <div class="coded__fill fill--question">
+                <h3>Question</h3>
+                <p>One question, then back to the slide.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section--tight band--paper" id="camera" aria-labelledby="camera-title">
+        <div class="container camera">
+          <div class="camera__head">
+            <h2 id="camera-title">The camera stays on your laptop</h2>
+            <p>Each frame becomes a number, then it is gone.</p>
+          </div>
+          <div>
+            <table>
+              <thead>
+                <tr><th scope="col">Measured</th><th scope="col">Never</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Head direction</td><td>Recording video</td></tr>
+                <tr><td>Eyes on the screen</td><td>Uploading video</td></tr>
+                <tr><td>Eyes closed</td><td>Running while paused</td></tr>
+                <tr><td>Which window is active</td><td>Running outside a session</td></tr>
+              </tbody>
+            </table>
+            <p class="camera__note">Press P to pause it.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="report-title">
+        <div class="container report">
+          <figure class="shot" style="margin: 0">
+            <div class="report__shot" data-slot="report" data-kind="product" data-alt="A LockIn session report: focus over time and the slides that lost you">
+              <img src="./screens/report.png" width="2256" height="1440" alt="A LockIn session report with a focus timeline, three lapses marked, and the line 'Your focus held for 5m 40s at a stretch'" loading="lazy" />
+            </div>
+          </figure>
+          <div class="report__text">
+            <h2 id="report-title">Which slides lost you</h2>
+            <p class="lead">After each session: how long your focus held, and where it slipped.</p>
+            <p class="label">The report shown uses sample data.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="band section" id="join" aria-labelledby="join-title">
+        <div class="container join">
+          <div class="join__facts">
+            <h2 id="join-title">Join the pilot</h2>
+            <dl class="facts">
+              <div><dt>Who</dt><dd>Students who revise alone from slides</dd></div>
+              <div><dt>You need</dt><dd>A laptop with a webcam</dd></div>
+              <div><dt>Starts</dt><dd><span class="fill" data-fill="start-date">Date to be announced</span></dd></div>
+              <div><dt>Good to know</dt><dd>Some get a plain reminder instead, to compare.</dd></div>
+            </dl>
+          </div>
+
+          <form class="sheet" data-endpoint="" novalidate aria-labelledby="join-title">
+            <div class="cell">
+              <label for="name">Name</label>
+              <input id="name" name="name" type="text" autocomplete="name" required />
+            </div>
+            <div class="cell">
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required />
+            </div>
+            <div class="cell cell--wide">
+              <label for="school">School or university</label>
+              <input id="school" name="school" type="text" autocomplete="organization" required />
+            </div>
+            <div class="cell cell--wide">
+              <fieldset>
+                <legend>Where you study</legend>
+                <div class="choice">
+                  <input type="radio" name="level" id="level-uni" value="university" checked /><label for="level-uni">University</label>
+                  <input type="radio" name="level" id="level-shs" value="senior-high" /><label for="level-shs">Senior high school</label>
+                </div>
+              </fieldset>
+            </div>
+            <div class="cell cell--wide">
+              <label class="consent" for="consent"><input id="consent" name="consent" type="checkbox" required /><span>I’m 18 or over, or a parent or guardian agrees</span></label>
+            </div>
+            <div class="cell cell--wide">
+              <button class="btn btn--primary" type="submit">Apply for a place</button>
+              <p class="sheet__help" id="join-help" aria-live="polite"></p>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">
+        <p class="footer__mast" aria-hidden="true">LockIn</p>
+        <div class="footer__row">
+          <nav class="footer__links" aria-label="Footer">
+            <a href="#session">A session</a>
+            <a href="#camera">The camera</a>
+            <a href="#join">Join the pilot</a>
+          </nav>
+          <p>A study aid, not a medical tool. Questions: <span class="fill" data-fill="contact">contact to be announced</span></p>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      // A form that posts nowhere yet (hallmark patterns): never claims success without a request.
+      document.querySelectorAll('form[data-endpoint]').forEach((form) => {
+        const help = form.querySelector('[aria-live]');
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const fields = [...form.querySelectorAll('input[required]')];
+          fields.forEach((f) => f.toggleAttribute('aria-invalid', !f.checkValidity()));
+          const bad = fields.find((f) => !f.checkValidity());
+          if (bad) {
+            bad.setAttribute('aria-describedby', help.id);
+            help.textContent =
+              bad.type === 'email' ? 'That email looks incomplete. Write it as name@example.com.'
+              : bad.type === 'checkbox' ? 'Tick the box to confirm your age or a parent or guardian’s agreement.'
+              : 'Fill in this field to apply.';
+            bad.focus();
+            return;
+          }
+          if (!form.dataset.endpoint) { help.textContent = 'Nothing was sent: this form is not connected yet.'; return; }
+          fetch(form.dataset.endpoint, { method: 'POST', body: new FormData(form) })
+            .then((r) => { help.textContent = r.ok ? 'Thanks. We will write to ' + form.email.value.trim() + ' before the pilot starts.' : 'That did not go through. Try again in a minute.'; })
+            .catch(() => { help.textContent = 'That did not go through. Try again in a minute.'; });
+        });
+      });
+    </script>
+  </body>
+</html>
