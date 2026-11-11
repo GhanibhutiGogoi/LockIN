@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "feature_schema": "mediapipe-blendshapes-mean-std-20s-v1",
+  "extractor": "mediapipe-face-landmarker-0.10.18",
+  "window_ms": 20000,
+  "source_kind": "real_self_report",
+  "label_kind": "self_report",
+  "source_url": "REPLACE_WITH_ACTUAL_AUTHORIZED_DATA_PROVENANCE",
+  "license": "REPLACE_WITH_ACTUAL_USE_AND_MODEL_DISTRIBUTION_TERMS",
+  "records_sha256": "REPLACE_WITH_SHA256_OF_JSONL"
+}

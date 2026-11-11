@@ -1,0 +1,59 @@
+{
+  "audit_date": "2026-11-05",
+  "training_ready": false,
+  "new_download_budget_bytes": 3000000000,
+  "conservative_audit_budget_reserved_bytes": 16000000,
+  "new_model_payload_downloaded_bytes": 35040571,
+  "known_training_data_preview_transferred_bytes": 200000,
+  "raw_participant_files_saved": false,
+  "candidates": [
+    {
+      "name": "EmpathicSchool",
+      "source_url": "https://zenodo.org/api/records/7372497/versions/latest",
+      "latest_record": 15556502,
+      "access": "restricted",
+      "public_file_count": 0,
+      "license": "Research-use agreement; signing required; no redistribution",
+      "verified_page": "https://zenodo.org/records/15556502",
+      "outcome": "not_downloaded_no_agreement_accepted",
+      "limitations": "Paper mentions public data, but actual latest record restricts file access. Self-report label granularity about two minutes; not all participants release videos."
+    },
+    {
+      "name": "StressID",
+      "source_url": "https://github.com/robustml-eurecom/stressID",
+      "access": "features_public_raw_data_and_labels_require_signed_academic_license",
+      "license": "Code BSD-3; dataset academic noncommercial agreement is distinct",
+      "public_features": "Feature Extraction/Features/video11tasks_aus_gaze_mean_std.csv",
+      "missing_input": "Dataset/labels.csv or self_assessments.csv; referenced by official notebook, absent in public tree",
+      "extractor": "OpenFace AU/gaze; NOT interchangeable with MediaPipe blendshapes",
+      "verified_page": "https://project.inria.fr/stressid/",
+      "outcome": "rejected_missing_labels_and_incompatible_live_features"
+    },
+    {
+      "name": "FORTH stress_dataset",
+      "source_url": "https://github.com/ggian/stress_dataset",
+      "access": "signed_request_then_provider_approval",
+      "outcome": "not_downloaded_no_agreement_accepted"
+    },
+    {
+      "name": "YodhaCameraInput",
+      "source_url": "https://huggingface.co/Icarus013/YodhaCameraInput",
+      "label_kind": "FER2013 emotion labels mapped to stress scores",
+      "outcome": "rejected_not_real_stress_ground_truth"
+    },
+    {
+      "name": "orbura-stress-mlp",
+      "source_url": "https://huggingface.co/Papajams/orbura-stress-mlp",
+      "label_kind": "synthetic heuristic targets",
+      "outcome": "rejected_not_real_stress_ground_truth"
+    }
+  ],
+  "decision": "Real stress training remains unavailable. MVP uses frozen official FER+ for explicitly labelled facial-expression cues and temporal relief rules, not stress probabilities. No restricted participant data or synthetic stress targets used.",
+  "pretrained_expression_mvp": {
+    "model_id": "ferplus-8-a2a2ba6a",
+    "source": "official ONNX Model Zoo",
+    "target": "facial_expression_not_stress",
+    "training_required": false,
+    "stress_validated": false
+  }
+}

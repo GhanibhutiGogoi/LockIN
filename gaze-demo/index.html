@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3f4ef" />
+    <title>LockIN · Gaze Lab</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="LockIN 首页">Lock<span>IN</span><i></i></a>
+        <span class="lab-label">GAZE LAB <span>/</span> 实验 01</span>
+        <div class="local-pill"><span></span> 本机推理 · 画面不上传</div>
+      </header>
+      <main>
+        <section class="intro">
+          <div><div class="eyebrow">LOCKIN / ATTENTION LOOP</div><h1>把视线，<span>连成学习闭环。</span></h1><p>个人校准 → 分心触发 → 本地视频 → 恢复观察 → 个人记忆</p></div>
+          <div class="intro-actions"><button id="start" class="button primary">启用摄像头 <span>↗</span></button><button id="stop" class="button secondary" disabled>停止</button></div>
+        </section>
+        <div id="notice" class="notice" role="status" hidden></div>
+        <section id="study-app" aria-label="学习会话与个人记忆"></section>
+        <div class="workspace">
+          <section class="study-panel">
+            <div class="panel-heading"><div><span class="tiny-dot"></span> 视线观察区</div><label class="toggle-label"><input id="show-dot" type="checkbox" checked />显示注视点</label></div>
+            <div class="reading-stage" id="reading-stage">
+              <div class="stage-grid"></div>
+              <div class="corner top-left"></div><div class="corner top-right"></div><div class="corner bottom-left"></div><div class="corner bottom-right"></div>
+              <div class="stage-tag">READ / LOOK AWAY / RETURN</div>
+              <article>
+                <span class="article-index">01 — 一次关于注意力的小实验</span>
+                <h2>目光回来了，<br />注意力也回来了吗？</h2>
+                <p>先自然地阅读这段文字。眼睛会在句子之间移动，也可能在某个地方停留，这些都是正常的阅读行为。</p>
+                <p>完成校准后，蓝点会显示模型估计的注视位置。试着看看屏幕四角，再转头看向旁边或低头，观察右侧状态的变化。</p>
+                <div class="article-note"><span>↳</span><p>这是 gaze 试验，不代表系统能读懂你的思考。<br />“看向屏幕”与“正在专心”需要分开理解。</p></div>
+              </article>
+              <div class="stage-footer"><span>单屏 · 固定窗口 · 正常坐姿</span><span id="coordinate">X — &nbsp; Y —</span></div>
+            </div>
+            <div class="experiment-strip"><div><span class="step-number">1</span><p>启用摄像头<small>允许本机访问</small></p></div><span class="step-line"></span><div><span class="step-number">2</span><p>跟随校准点<small>9 点校准 + 3 点验证</small></p></div><span class="step-line"></span><div><span class="step-number">3</span><p>转头，再看回来<small>观察状态与延迟</small></p></div></div>
+          </section>
+          <aside>
+            <section class="camera-card">
+              <div class="panel-heading"><div>CAMERA <span class="small-mono" id="backend">/ OFF</span></div><span id="camera-led" class="camera-led"></span></div>
+              <div class="camera-view"><video id="camera" autoplay playsinline muted></video><div id="camera-placeholder"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><rect x="6" y="13" width="26" height="23" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="m32 20 10-5v20l-10-5" stroke="currentColor" stroke-width="1.5"/><circle cx="19" cy="24.5" r="5" stroke="currentColor" stroke-width="1.5"/></svg><span>等待开启摄像头</span></div><span id="camera-caption">仅本机处理，不录制</span></div>
+            </section>
+            <section class="status-card">
+              <div class="eyebrow">LIVE STATE <span id="fps">— FPS</span></div>
+              <div id="state" class="state" data-state="unknown"><span class="state-orb"></span><h2 id="state-label">等待开始</h2></div>
+              <p id="state-detail">开启摄像头，完成校准后开始判断。</p>
+              <div class="dwell-track"><div id="dwell-progress"></div></div>
+              <div class="dwell-meta"><span>连续屏外证据</span><span id="dwell-value">0.0 / 2.0 s</span></div>
+              <dl class="live-values"><div><dt>脸部 / 眼睛</dt><dd id="face-value">— / —</dd></div><div><dt>头部 X / Y</dt><dd id="head-value">— / —</dd></div><div><dt>校准验证误差</dt><dd id="accuracy-value">尚未校准</dd></div></dl>
+              <button id="calibrate" class="button calibration-button" disabled>开始校准 <span>◎</span></button>
+            </section>
+            <section class="rule-card">
+              <div class="panel-heading"><div>规则调节</div><span class="experimental">EXPERIMENTAL</span></div>
+              <label class="range-label" for="tolerance"><span>几何容差 <small>越小越敏感</small></span><output id="tolerance-label">1.00×</output></label>
+              <input id="tolerance" type="range" min="0.5" max="2.5" step="0.05" value="1" />
+              <label class="range-label" for="duration"><span>屏外持续时间</span><output id="duration-label">2.0 s</output></label>
+              <input id="duration" type="range" min="0.5" max="8" step="0.5" value="2" />
+              <p class="rule-explanation">超出个人校准的眼部 / 头部范围，并持续达到阈值，才判定为屏外。闭眼、脸部丢失和跟踪中断记为无法判断。</p>
+            </section>
+          </aside>
+        </div>
+        <section id="study-history" aria-label="干预记录与试用标注"></section>
+        <footer><span>LOCKIN <span class="footer-slash">/</span> GAZE PROTOTYPE</span><span>WebEyeTrack · BlazeGaze · MediaPipe <span class="footer-slash">/</span> 尚未验证分心检测准确率</span></footer>
+      </main>
+      <div id="gaze-dot" hidden aria-hidden="true"><span></span></div>
+      <div id="calibration" hidden>
+        <div class="calibration-copy"><span class="eyebrow" id="calibration-phase">个人校准</span><h2 id="calibration-title">看着圆点，保持自然坐姿。</h2><p id="calibration-description">不需要点击圆点；保持注视，采集完成后自动移动。</p><div class="point-steps" id="point-steps"></div><p id="calibration-count">正在准备…</p><button id="cancel-calibration" class="text-button">取消校准</button></div>
+        <div id="calibration-target"><div></div><span></span></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
