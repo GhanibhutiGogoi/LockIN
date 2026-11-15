@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { formatDuration, slidesThatLostYou } from '../session/metrics';
-import { actions, useApp } from '../store';
+import { actions, useApp, type Report } from '../store';
 import { FocusTimeline } from './FocusTimeline';
 import { Icon } from './Icon';
 import { IntegrationsButton } from './IntegrationsPanel';
@@ -8,15 +8,18 @@ import { SlideView } from './SlideView';
 
 export function ReportScreen() {
   const report = useApp((s) => s.report);
+  const decks = useApp((s) => s.decks);
   useEffect(() => {
     if (!report) actions.go('desk');
   }, [report]);
   if (!report) return null;
   const { deck, log, review, questions } = report;
+  const canStudy = decks.some((d) => d.id === deck.id);
+  if (!log.samples.length || log.attentionSource === 'unavailable') return <ReadingReport report={report} canStudy={canStudy} />;
   const sc = review.score;
   const lost = slidesThatLostYou(log.rescues).slice(0, 4);
-  const durationSec = (log.endedAt - log.startedAt) / 1000;
-  const lapses = log.rescues.filter((r) => r.context.rescueInRow === 1).length;
+  const durationSec = log.activeSeconds ?? (log.endedAt - log.startedAt) / 1000;
+  const lapses = log.rescues.filter((r) => r.context.rescueInRow === 1 && r.context.trigger !== 'manual').length;
   const answered = questions.filter((q) => q.chosen !== null);
   const correct = answered.filter((q) => q.chosen === q.answerIndex).length;
   const isSample = log.sessionId === 'sample';
@@ -37,7 +40,8 @@ export function ReportScreen() {
         </button>
         <span className="flex-1" />
         <IntegrationsButton />
-        <button type="button" className="btn btn-primary btn-sm ml-1" onClick={() => studyAgain(0)}>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={() => downloadReport(report)}>Download report</button>
+        <button type="button" className="btn btn-primary btn-sm ml-1" onClick={() => studyAgain(0)} disabled={!canStudy}>
           Study again
         </button>
       </header>
@@ -52,6 +56,7 @@ export function ReportScreen() {
                 {deck.title}
                 <span className="num font-normal"> · {formatDuration(durationSec)}</span>
                 {isSample && <span className="font-normal"> · example</span>}
+                {log.attentionSource === 'simulated' && <span className="font-normal"> · simulated, not saved</span>}
               </h1>
               {durationSec < 120 ? (
                 <p className="mt-4 text-[clamp(36px,4.4vw,60px)] leading-[1.05] font-bold tracking-[-0.03em]">That was a quick one</p>
@@ -70,7 +75,7 @@ export function ReportScreen() {
 
           <section className="mt-auto pt-10" aria-label="Focus across the session">
             <p className="text-[17px] text-graphite">
-              <Fact>{Math.round(sc.onTaskShare * 100)}%</Fact> locked in
+              <Fact>{Math.round(sc.onTaskShare * 100)}%</Fact> of measured samples focused
               <Dot />
               focus slipped <Fact>{slipped}</Fact>
               {sc.timeToRefocusMedianSec !== null && (
@@ -103,14 +108,14 @@ export function ReportScreen() {
                       <p className="truncate text-[16px] font-semibold">{deck.slides[slideIndex]?.title}</p>
                       <p className="text-[15px] text-graphite">{count === 1 ? 'once' : `${count} times`}</p>
                     </div>
-                    <button type="button" className="btn btn-quiet btn-sm" onClick={() => studyAgain(slideIndex)} aria-label={`Revisit slide ${slideIndex + 1}: ${deck.slides[slideIndex]?.title ?? ''}`}>
+                    <button type="button" className="btn btn-quiet btn-sm" disabled={!canStudy} onClick={() => studyAgain(slideIndex)} aria-label={`Revisit slide ${slideIndex + 1}: ${deck.slides[slideIndex]?.title ?? ''}`}>
                       Revisit
                     </button>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="mt-6 text-[17px] text-graphite">None. Your focus held through every slide.</p>
+              <p className="mt-6 text-[17px] text-graphite">No automatic recaps were recorded in this session.</p>
             )}
           </div>
 
@@ -145,7 +150,7 @@ export function ReportScreen() {
                 })}
               </ul>
             ) : (
-              <p className="mt-6 text-[17px] text-graphite">No clips, so no questions.</p>
+              <p className="mt-6 text-[17px] text-graphite">No quiz answers were recorded in this session.</p>
             )}
           </div>
         </section>
@@ -172,8 +177,8 @@ function Delta({ delta }: { delta: number | null }) {
 /** What LockIn learned, as one paragraph in one voice — no second tier of tips. */
 function Memo({ memo, tips, quick, className = '' }: { memo?: string; tips?: string[]; quick: boolean; className?: string }) {
   const text = quick
-    ? 'Study for 10 minutes or more and this becomes your attention span.'
-    : [memo ?? 'After a few sessions LockIn will know which clips bring you back fastest.', ...(tips ?? [])].join(' ');
+    ? 'This was a short session. More measured study time is needed to describe a typical focused stretch.'
+    : [memo ?? 'This report describes the attention measurements recorded during this session.', ...(tips ?? [])].join(' ');
   return (
     <p className={`max-w-[48ch] min-w-0 text-[18px] leading-[1.55] lg:col-span-5 lg:pb-2 ${className}`} aria-label="What works for you">
       {text}
@@ -183,3 +188,48 @@ function Memo({ memo, tips, quick, className = '' }: { memo?: string; tips?: str
 
 const Fact = ({ children }: { children: ReactNode }) => <span className="num font-semibold whitespace-nowrap text-ink">{children}</span>;
 const Dot = () => <span className="mx-2 text-pencil" aria-hidden>·</span>;
+
+function downloadReport(report: Report) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify({ ...report, deck: { ...report.deck, pdfUrl: undefined } }, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `lockin-session-${report.log.sessionId}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function ReadingReport({ report, canStudy }: { report: Report; canStudy: boolean }) {
+  const { deck, log, questions } = report;
+  const visited = log.visitedSlides ?? [...new Set(log.activity?.map((a) => a.slideIndex) ?? [])];
+  const active = log.activeSeconds ?? (log.endedAt - log.startedAt) / 1000;
+  const resume = (slide: number) => { actions.openDeck(deck.id); actions.setSlide(slide); actions.go('study'); };
+  return <div className="min-h-full bg-paper">
+    <header className="mx-auto flex max-w-5xl flex-wrap items-center gap-3 px-5 py-5">
+      <button type="button" className="btn btn-quiet btn-sm" onClick={() => actions.go('desk')}><Icon name="arrow-left" size={18} />Your library</button>
+      <span className="flex-1" />
+      <button type="button" className="btn btn-quiet btn-sm" onClick={() => downloadReport(report)}>Download report</button>
+      <button type="button" className="btn btn-primary btn-sm" disabled={!canStudy} onClick={() => resume(visited.at(-1) ?? 0)}>Study again</button>
+    </header>
+    <main className="mx-auto max-w-5xl px-5 py-10">
+      <h1 className="text-[clamp(30px,4vw,48px)] leading-tight">Session complete</h1>
+      <p className="mt-4 break-words text-[22px]">{deck.title}</p>
+      <p className="mt-2 text-[16px] text-graphite">{new Date(log.endedAt).toLocaleString()} · {formatDuration(active)} studying · {visited.length} of {deck.slideCount} slides visited</p>
+      <p className="mt-7 max-w-[65ch] text-[17px] leading-relaxed text-graphite">No attention measurements were available for this session. This report records your study time and slides visited. Having the tab open does not establish that you were focused.</p>
+      {!canStudy && <p className="mt-4 text-[16px] text-graphite">The original deck is no longer in this browser. Upload it again to revisit the slides.</p>}
+      <section className="mt-12" aria-labelledby="visited-title">
+        <h2 id="visited-title" className="text-[23px]">Slides you visited</h2>
+        {visited.length ? <ol className="mt-4 divide-y divide-rule">{visited.map((index) => <li key={index} className="flex items-center justify-between gap-4 py-4">
+          <span className="min-w-0 break-words text-[17px]">{index + 1}. {deck.slides[index]?.title ?? 'Slide'}</span>
+          <button type="button" className="btn btn-quiet btn-sm" disabled={!canStudy} onClick={() => resume(index)} aria-label={`Revisit slide ${index + 1}`}>Revisit</button>
+        </li>)}</ol> : <p className="mt-4 text-graphite">The session ended before a slide visit was recorded.</p>}
+      </section>
+      <section className="mt-10" aria-labelledby="reading-questions">
+        <h2 id="reading-questions" className="text-[23px]">Questions</h2>
+        {questions.length ? <ul className="mt-4 space-y-5">{questions.map((q, i) => <li key={i}>
+          <p className="font-semibold">{q.question}</p>
+          <p className="mt-1 text-graphite">{q.chosen === null ? 'Not answered' : q.chosen === q.answerIndex ? 'Correct' : 'Incorrect'} · Answer: {q.options[q.answerIndex]}</p>
+        </li>)}</ul> : <p className="mt-4 text-[17px] text-graphite">No quiz answers were recorded.</p>}
+      </section>
+    </main>
+  </div>;
+}

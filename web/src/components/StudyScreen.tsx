@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { simulator } from '../providers/mock/attention';
 import { registry } from '../providers/registry';
-import { dismissBreak, endBreak, endSession, enterStudy, onSlideChange, takeBreak, togglePause } from '../session/engine';
+import { dismissBreak, endBreak, endSession, enterStudy, onSlideChange, requestRecap, takeBreak, togglePause } from '../session/engine';
 import { actions, useApp, useDeck } from '../store';
 import { CONSENT_VERSION, ConsentScreen } from './ConsentScreen';
 import { FocusGauge } from './FocusGauge';
@@ -25,7 +25,7 @@ export function StudyScreen() {
   // After consent: the camera (only if the tracker needs it) and the session.
   // enterStudy is single-flight, and resumes a session paused for recalibration.
   useEffect(() => {
-    if (consented) void enterStudy();
+    if (consented) void enterStudy().catch(() => actions.toast('The session could not start. Return to your library and reopen this deck.', 'error'));
   }, [consented]);
 
   useEffect(() => {
@@ -96,7 +96,7 @@ export function StudyScreen() {
         e.preventDefault();
         actions.setSlide(useApp.getState().slideIndex - 1);
       } else if (k.toLowerCase() === 'p') void togglePause();
-      else if (k.toLowerCase() === 'd' && registry.isMock('attention')) {
+      else if (import.meta.env.MODE === 'demo' && k.toLowerCase() === 'd' && registry.isMock('attention')) {
         simulator.set(simulator.profile === 'phone' ? 'reading' : 'phone');
       }
     };
@@ -116,6 +116,7 @@ export function StudyScreen() {
       <main className="absolute inset-0 px-3 pt-16 pb-16 sm:px-6 md:px-20">
         {slide && <SlideView deck={deck} slide={slide} />}
       </main>
+      {!slide?.text.trim() && <p role="status" className="absolute inset-x-4 top-16 z-10 bg-sheet px-4 py-2 text-center text-[14px] text-graphite">This slide has no selectable text. You can read it here; AI recaps need a text-based PDF.</p>}
       {deck.pdfUrl && (
         // a PDF page keeps its own layout, so a phone held upright shows it small
         <p className="chrome pointer-events-none absolute inset-x-0 bottom-20 hidden text-center text-[14px] text-graphite max-md:portrait:block" data-quiet={quiet}>
@@ -134,6 +135,7 @@ export function StudyScreen() {
           <Elapsed />
           <span className="mx-1.5 h-5 w-px bg-rule-strong" aria-hidden />
           <CameraButton />
+          {registry.canRecap() && <button type="button" className="btn btn-quiet btn-sm" onClick={requestRecap} disabled={!!rescue || state === 'paused' || !slide?.text.trim()}>Recap slide</button>}
           <IntegrationsButton className="icon-btn h-9 w-9" />
           <button type="button" className="icon-btn h-9 w-9" onClick={() => useApp.setState({ settingsOpen: true })} aria-label="Settings" title="Settings">
             <Icon name="settings" size={18} />
@@ -204,10 +206,11 @@ function Elapsed() {
 function useCameraLabel() {
   const camera = useApp((s) => s.camera);
   const paused = useApp((s) => s.live.state === 'paused');
+  const measured = useApp((s) => s.live.attentionAvailable);
   const simulated = registry.isMock('attention');
   const label = paused
     ? camera === 'paused' ? 'Camera paused' : 'Tracking paused'
-    : camera === 'on' ? (simulated ? 'Camera on · simulated focus' : 'Camera on · this laptop only') : simulated ? 'Simulated focus' : 'App switches only';
+    : camera === 'on' ? (simulated ? 'Camera on · simulated focus' : 'Camera on') : simulated ? 'Simulated focus' : measured ? 'Gaze tracking connected' : 'Tab activity only · gaze unavailable';
   const color = paused ? 'var(--pencil)' : camera === 'on' ? 'var(--lapse)' : 'var(--ok)';
   return { label: `${label}. ${paused ? 'Resume' : 'Pause'} (P)`, title: `${label} · P to ${paused ? 'resume' : 'pause'}`, color, paused };
 }
@@ -398,8 +401,10 @@ function BreakCard({ reason, until }: { reason: 'repeated' | 'rescueCap'; until:
 /** Only when the focus simulator is on: tells teammates and demo viewers how to drive it. */
 function SimHint() {
   const [, force] = useState(0);
-  useEffect(() => simulator.subscribe(() => force((x) => x + 1)), []);
-  if (!registry.isMock('attention')) return null;
+  useEffect(() => {
+    if (import.meta.env.MODE === 'demo') return simulator.subscribe(() => force((x) => x + 1));
+  }, []);
+  if (import.meta.env.MODE !== 'demo' || !registry.isMock('attention')) return <span className="hidden text-[14px] text-graphite lg:block lg:w-56">{registry.canRecap() ? 'Recaps enabled' : 'AI recaps unavailable'}</span>;
   const away = simulator.profile === 'phone';
   return (
     <button

@@ -8,8 +8,10 @@
  * ends on time and the next clip isn't affected.
  */
 import type { RescueMedia, Variant } from '../contracts/types';
+import { DEMO_MODE } from './features';
 
 export interface Narration {
+  error?(): string | null;
   /** seconds on the caption clock */
   time(): number;
   /** index of the caption word being spoken, from boundary events (−1 if unknown) */
@@ -38,11 +40,17 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
   let fallback: Narration | null = null;
   /** Set when autoplay was refused: captions run on the clock, silently. */
   let clockStart: number | null = null;
+  let error: string | null = null;
 
   const toSpeech = () => {
     if (stopped || fallback || clockStart !== null) return;
     audio.onerror = audio.onended = null;
     audio.pause();
+    if (!DEMO_MODE) {
+      error = 'The narration file could not be played. Check your connection and request the recap again.';
+      resolve();
+      return;
+    }
     fallback = speechNarration(media, text, variant, isMuted);
     void fallback.done.then(resolve);
   };
@@ -51,12 +59,18 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
   audio.play().catch((err: unknown) => {
     if (stopped || fallback) return;
     if ((err as DOMException)?.name === 'NotAllowedError') {
+      if (!DEMO_MODE) {
+        error = 'Your browser blocked narration. Allow sound for this site, then request the recap again.';
+        resolve();
+        return;
+      }
       clockStart = performance.now();
       setTimeout(() => !stopped && resolve(), media.durationSec * 1000);
     } else toSpeech();
   });
 
   return {
+    error: () => error,
     time: () => (fallback ? fallback.time() : clockStart !== null ? (performance.now() - clockStart) / 1000 : audio.currentTime),
     boundaryWord: () => (fallback ? fallback.boundaryWord() : -1),
     stop: () => {

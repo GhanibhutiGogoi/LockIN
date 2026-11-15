@@ -40,6 +40,7 @@ function cached<T>(map: Map<string, Promise<T>>, k: string, make: () => Promise<
 
 export async function getPack(deck: Deck, slideIndex: number, variant: Variant, depth: 1 | 2, profileMemo?: string): Promise<RescuePack> {
   const slide = deck.slides[slideIndex];
+  if (!slide?.text.trim()) throw new Error('This slide has no readable text. Use a PDF with selectable text for AI recaps.');
   const sk = scriptKey(deck.id, slideIndex, variant, depth);
   const script = await cached(scripts, sk, () => registry.content.getScript({ deck, slide, variant, profileMemo, depth }));
   const media = await cached(medias, mediaKey(deck.id, slideIndex, variant, depth), () => registry.media.renderMedia({ deckId: deck.id, slideIndex, script, variant }));
@@ -48,6 +49,7 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
 }
 
 export function prefetch(deck: Deck, slideIndex: number, profileMemo?: string) {
+  if (!registry.canRecap()) return;
   registry.content.prewarm?.(deck.id, slideIndex);
   for (let i = slideIndex; i < Math.min(deck.slideCount, slideIndex + 3); i++) {
     getPack(deck, i, warmVariant, 1, profileMemo).catch(() => {});
@@ -63,3 +65,6 @@ export function clearPacks() {
   scripts.clear();
   medias.clear();
 }
+
+// Service changes cannot reuse an earlier provider's script or audio.
+registry.subscribe(clearPacks);

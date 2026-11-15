@@ -1,5 +1,30 @@
 # Plugging into the LockIn UI
 
+Normal builds now default to `attention=off`, `content=local`, `media=off`, and
+`adaptive=local`. PDF reading and browser-local storage work independently.
+Synthetic providers and the sample deck require `npm run dev:demo`.
+
+New additive session fields: `attention_source` (`gaze`, `simulated`, or
+`unavailable`), `active_seconds`, `visited_slides`, and `activity` (tab-active
+and paused flags). The `samples` array contains only actual supplied focus
+measurements, and can be empty. Do not infer attention from `activity`.
+`RescueContext.trigger` also supports `manual`: a learner-requested recap,
+which must not count as an attention lapse or a randomized intervention.
+Media in normal mode must supply an audio URL and must not declare mock
+provenance. Missing gameplay video leaves the slide visible; no placeholder
+animation is substituted. Build-time provider modes/URLs remain defaults;
+**Settings → AI connection** can save a media gateway URL at runtime, including
+in production. Saved developer-panel overrides are still ignored in production.
+
+The public connection form expects the bundled LockIn media API's `/healthz`
+(`service: lockin-media`, `api_version: 1`, `mode: real`, `capabilities`),
+`/readyz` (`ready: true`, `mode: real`), `/voices` and `/library/gameplay`.
+Set `LOCKIN_CONTENT_URL` on that server to forward `/scripts` and
+`/feedback/wrong-fact` through the same URL. This gateway imports PDFs locally
+and advertises `deck_import: false`; it does not convert PPTX. Script routing
+discovery means the upstream is configured, not that inference has been tested.
+See the [local/server setup guide](../../media/docs/DEPLOYMENT.md).
+
 > **中文摘要**：UI 已經可以獨立跑（每一組都有 mock）。每組只要實作 `src/contracts/providers.ts` 裡屬於自己的那一個介面，
 > 或是照下面的 HTTP / WebSocket 格式開一個服務，然後在畫面右下角的 **Integrations**（或按 `` ` ``）把自己那組從 `mock` 切到 `http` / `ws`、
 > 填上網址、按 **Run contract check**。格式不對的話，面板會直接列出是哪個欄位錯。

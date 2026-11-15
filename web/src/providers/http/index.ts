@@ -23,6 +23,7 @@ import type {
 import { DEFAULT_VARIANT } from '../../contracts/defaults';
 import { assertContract, checkChoice, checkDeck, checkMedia, checkReview, checkScript } from '../../contracts/validate';
 import { call, resolveUrl } from './client';
+import { DEMO_MODE } from '../../lib/features';
 
 // ───────── AI 分析 ─────────
 export class HttpContentProvider implements ContentProvider {
@@ -74,6 +75,9 @@ export class HttpMediaProvider implements MediaProvider {
   }
   async renderMedia(args: { deckId: string; slideIndex: number; script: RescueScript; variant: Variant }): Promise<RescueMedia> {
     const media = await call<RescueMedia>(this.base, '/media', { body: args, timeoutMs: 60_000 });
+    if (!DEMO_MODE && (!media.audioUrl || media.provenance?.mode === 'mock' || media.provenance?.modelInference === false)) {
+      throw new Error('The narration service is not producing model audio yet. You can keep studying while it is being connected.');
+    }
     media.audioUrl = resolveUrl(this.base, media.audioUrl);
     media.broll = (media.broll ?? []).map((b) => ({ ...b, url: resolveUrl(this.base, b.url)! }));
     return assertContract('Video · POST /media', media, (m) => checkMedia(m, `${args.script.hook} ${args.script.script}`));

@@ -33,6 +33,8 @@ interface Pending {
 }
 
 interface Runtime {
+  activity: NonNullable<SessionLog['activity']>;
+  visitedSlides: Set<number>;
   sessionId: string;
   machine: Machine;
   cfg: SessionConfig;
@@ -145,7 +147,7 @@ async function startSession() {
     actions.toast('Personal AI service is unreachable, using your own settings.', 'error');
   }
   // the user's own choice always wins over the model
-  cfg.nudgeOnly = !!s.settings.nudgeOnly;
+  cfg.nudgeOnly = !!s.settings.nudgeOnly || !registry.canRecap();
 
   let profileMemo: string | undefined;
   try {
@@ -160,6 +162,8 @@ async function startSession() {
     cfg,
     samples: [],
     log: [],
+    activity: [],
+    visitedSlides: new Set([s.slideIndex]),
     outcomes: [],
     pending: [],
     recentVariants: [],
@@ -233,6 +237,10 @@ export async function endSession() {
 
     const deck = currentDeck();
     const log: SessionLog = {
+      attentionSource: registry.isMock('attention') ? 'simulated' : r.log.length ? 'gaze' : 'unavailable',
+      activeSeconds: useApp.getState().live.elapsed,
+      activity: r.activity,
+      visitedSlides: [...r.visitedSlides],
       sessionId: r.sessionId,
       userId: useApp.getState().userId,
       deckId: deck.id,
@@ -248,8 +256,11 @@ export async function endSession() {
       review = { score: scoreSession(log.samples, log.rescues) };
       actions.toast('Personal AI service is unreachable. The report uses local numbers only.', 'error');
     }
-    if (log.samples.length >= 30) actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
-    useApp.setState({ report: { deck, log, review, questions: r.questions }, live: emptyLive(), rescue: null, breakCard: null });
+    if (log.samples.length >= 30 && log.attentionSource === 'gaze') actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
+    const report = { deck, log, review, questions: r.questions };
+    if (log.attentionSource === 'simulated' || deck.sourceType === 'demo') useApp.setState({ report });
+    else await actions.saveReport(report);
+    useApp.setState({ live: emptyLive(), rescue: null, breakCard: null });
     actions.go('report');
   } finally {
     if (rt === r) rt = null;
@@ -293,7 +304,9 @@ function tick() {
 
   const { score, eyesClosed } = smoothed(now);
   const active = windowActive();
-  const res = step(rt.machine, { now, score, windowActive: active, eyesClosed, noteTaking }, rt.cfg);
+  // Window-only operation can recover after returning to the tab. This control
+  // input is never stored as an attention measurement.
+  const res = step(rt.machine, { now, score: score ?? rt.cfg.enterFocused, windowActive: active, eyesClosed, noteTaking }, rt.cfg);
   rt.machine = res.m;
   res.events.forEach(handle);
 
@@ -304,7 +317,8 @@ function tick() {
   const sec = Math.floor(sessionSec(now));
   if (sec !== rt.lastLogSec) {
     rt.lastLogSec = sec;
-    rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
+    if (score !== null) rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
+    rt.activity.push({ t: sec, slideIndex: s.slideIndex, windowActive: active, paused: m.state === 'paused' || m.state === 'break' });
     checkPending(sec);
   }
 
@@ -312,6 +326,7 @@ function tick() {
   useApp.setState({
     live: {
       ...live,
+      attentionAvailable: score !== null,
       state: m.state,
       score: score ?? live.score,
       effective: m.effective,
@@ -340,6 +355,7 @@ function handle(e: MachineEvent) {
     case 'refocused': {
       // Time to refocus counts from the moment the user is back on the slide (clip and question over).
       const now = Date.now();
+      if (smoothed(now).score === null) break;
       for (const p of rt.pending) if (p.outcome.timeToRefocusSec === null) p.outcome.timeToRefocusSec = Math.round((now - p.returnedAt) / 100) / 10;
       break;
     }
@@ -410,7 +426,7 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   const id = uid('r_');
   useApp.setState({
     rescue: { id, phase: 'loading', trigger, depth, context, lapseAt, skipped: false, answers: [] },
-    live: { ...s.live, lapsesBySlide: depth === 1 ? { ...s.live.lapsesBySlide, [s.slideIndex]: (s.live.lapsesBySlide[s.slideIndex] ?? 0) + 1 } : s.live.lapsesBySlide },
+    live: { ...s.live, lapsesBySlide: depth === 1 && trigger !== 'manual' ? { ...s.live.lapsesBySlide, [s.slideIndex]: (s.live.lapsesBySlide[s.slideIndex] ?? 0) + 1 } : s.live.lapsesBySlide },
   });
 
   const choice: VariantChoice = await withTimeout<VariantChoice>(registry.adaptive.chooseVariant(context), 1500, () => ({ variant: fallbackVariant(), isHoldout: false }));
@@ -445,6 +461,19 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
     act({ type: 'rescueStarted' });
     useApp.setState({ rescue: { ...useApp.getState().rescue!, phase: 'error', choice: { ...choice, variant }, error: (err as Error).message, startedAt: Date.now() } });
   }
+}
+
+/** A user-requested recap works independently of a gaze tracker. */
+export function requestRecap() {
+  if (!rt || ending || !registry.canRecap() || useApp.getState().rescue) return;
+  const slide = currentDeck().slides[useApp.getState().slideIndex];
+  if (!slide?.text.trim()) { actions.toast('This slide has no readable text. Use a PDF with selectable text for AI recaps.', 'error'); return; }
+  act({ type: 'requestRescue' });
+}
+
+export function playbackFailed(message: string) {
+  const rescue = useApp.getState().rescue;
+  if (rescue) useApp.setState({ rescue: { ...rescue, phase: 'error', error: message } });
 }
 
 /** Narration finished. */
@@ -493,6 +522,11 @@ export function answerQuiz(questionIndex: number, chosen: number) {
 export function finishRescue() {
   const r = useApp.getState().rescue;
   if (!r || !rt) return;
+  if (!r.pack || r.phase === 'error') {
+    useApp.setState({ rescue: null });
+    act({ type: 'rescueFinished', clipMs: 0 });
+    return;
+  }
   const now = Date.now();
   const started = r.startedAt ?? now;
   const clipMs = Math.max(0, (r.clipEndedAt ?? now) - started);
@@ -612,6 +646,7 @@ export function dismissBreak() {
 
 export function onSlideChange(index: number) {
   if (!rt) return;
+  rt.visitedSlides.add(index);
   prefetch(currentDeck(), index, rt.profileMemo);
 }
 

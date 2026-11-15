@@ -1,13 +1,14 @@
 import { create } from 'zustand';
 import type { Deck, FocusState, LapseTrigger, RescueContext, RescuePack, SessionLog, SessionReview, UserSettings, VariantChoice } from './contracts/types';
 import type { CameraStatus } from './lib/camera';
-import { DEMO_DECK } from './lib/demoDeck';
+import { library } from './lib/library';
 import { load, save, uid } from './lib/storage';
 
 export type Screen = 'desk' | 'setup' | 'study' | 'report';
 export type Theme = 'system' | 'light' | 'dark';
 
 export interface Live {
+  attentionAvailable: boolean;
   state: FocusState;
   /** smoothed camera score, 0–100 */
   score: number;
@@ -72,6 +73,9 @@ interface AppState {
   theme: Theme;
   settings: UserSettings;
   decks: Deck[];
+  libraryReady: boolean;
+  libraryWarning: string | null;
+  reports: Report[];
   deckSummaries: Record<string, DeckSummary>;
   spanHistory: { at: number; sec: number }[];
   deckId: string;
@@ -102,6 +106,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
 };
 
 export const emptyLive = (): Live => ({
+  attentionAvailable: false,
   state: 'idle',
   score: 0,
   effective: 0,
@@ -119,10 +124,13 @@ export const useApp = create<AppState>(() => ({
   screen: 'desk',
   theme: load<Theme>('lockin.theme', 'system'),
   settings: { ...DEFAULT_SETTINGS, ...load<Partial<UserSettings>>('lockin.settings', {}), userId },
-  decks: [DEMO_DECK],
+  decks: [],
+  libraryReady: false,
+  libraryWarning: null,
+  reports: [],
   deckSummaries: load('lockin.deckSummaries', {}),
   spanHistory: load('lockin.spanHistory', []),
-  deckId: DEMO_DECK.id,
+  deckId: '',
   slideIndex: 0,
   camera: 'off',
   calibrated: load('lockin.calibrated', false),
@@ -136,7 +144,46 @@ export const useApp = create<AppState>(() => ({
   toast: null,
 }));
 
+let loadingLibrary: Promise<void> | undefined;
 export const actions = {
+  loadLibrary() {
+    return loadingLibrary ??= (async () => {
+      const [decks, reports] = await Promise.allSettled([library.decks(), library.reports()]);
+      useApp.setState({
+        decks: decks.status === 'fulfilled' ? decks.value : [],
+        reports: reports.status === 'fulfilled' ? reports.value : [],
+        libraryReady: true,
+        libraryWarning: decks.status === 'rejected' || reports.status === 'rejected'
+          ? 'Browser storage is unavailable. New slides may only stay open for this visit.' : null,
+      });
+    })();
+  },
+  async saveDeck(deck: Deck, file?: Blob) {
+    try { await library.saveDeck(deck, file); }
+    catch {
+      useApp.setState({ libraryWarning: 'This deck could not be saved in your browser. Keep this tab open, or free browser storage and upload it again.' });
+      actions.toast('Slides opened for this visit only. Browser storage could not save this deck.', 'error');
+    }
+    actions.addDeck(deck);
+  },
+  async removeDeck(deck: Deck) {
+    await library.removeDeck(deck.id);
+    useApp.setState((s) => ({ decks: s.decks.filter((d) => d.id !== deck.id) }));
+    if (deck.pdfUrl?.startsWith('blob:')) {
+      const { releasePdf } = await import('./lib/pdf');
+      await releasePdf(deck.pdfUrl);
+    }
+  },
+  async saveReport(report: Report) {
+    useApp.setState((s) => ({ report, reports: [report, ...s.reports.filter((r) => r.log.sessionId !== report.log.sessionId)] }));
+    try { await library.saveReport(report); }
+    catch { actions.toast('This report could not be saved. Download it before closing this tab.', 'error'); }
+  },
+  openReport(report: Report) {
+    const deck = useApp.getState().decks.find((d) => d.id === report.deck.id) ?? report.deck;
+    useApp.setState({ report: { ...report, deck } });
+    actions.go('report');
+  },
   go(screen: Screen) {
     useApp.setState({ screen });
     window.scrollTo(0, 0);
@@ -164,13 +211,17 @@ export const actions = {
     useApp.setState({ decks, deckId: deck.id, slideIndex: 0 });
   },
   openDeck(deckId: string) {
-    useApp.setState({ deckId, slideIndex: 0 });
+    const deck = useApp.getState().decks.find((d) => d.id === deckId);
+    if (!deck) return;
+    const positions = load<Record<string, number>>('lockin.positions', {});
+    useApp.setState({ deckId, slideIndex: Math.max(0, Math.min(deck.slideCount - 1, positions[deckId] ?? 0)) });
   },
   setSlide(i: number) {
     const s = useApp.getState();
     const deck = s.decks.find((d) => d.id === s.deckId);
     if (!deck) return;
     useApp.setState({ slideIndex: Math.max(0, Math.min(deck.slideCount - 1, i)) });
+    save('lockin.positions', { ...load('lockin.positions', {}), [deck.id]: useApp.getState().slideIndex });
   },
   toast(text: string, tone: 'info' | 'error' = 'info') {
     const id = Date.now();
@@ -190,8 +241,9 @@ export const actions = {
     save('lockin.deckSummaries', deckSummaries);
     save('lockin.spanHistory', spanHistory);
   },
-  clearHistory() {
-    useApp.setState({ deckSummaries: {}, spanHistory: [] });
+  async clearHistory() {
+    await library.clearReports();
+    useApp.setState({ deckSummaries: {}, spanHistory: [], reports: [], report: null });
     save('lockin.deckSummaries', {});
     save('lockin.spanHistory', []);
     try {
@@ -210,6 +262,8 @@ export function applyTheme(theme: Theme) {
 
 export const currentDeck = () => {
   const s = useApp.getState();
-  return s.decks.find((d) => d.id === s.deckId) ?? DEMO_DECK;
+  const deck = s.decks.find((d) => d.id === s.deckId);
+  if (!deck) throw new Error('Open a deck before starting a study session.');
+  return deck;
 };
-export const useDeck = () => useApp((s) => s.decks.find((d) => d.id === s.deckId) ?? DEMO_DECK);
+export const useDeck = () => useApp((s) => s.decks.find((d) => d.id === s.deckId)!);

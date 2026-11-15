@@ -4,7 +4,7 @@ import { registry } from '../providers/registry';
 import { actions } from '../store';
 
 /** Bump when what is measured or kept changes: everyone sees the screen again. */
-export const CONSENT_VERSION = '2026-11-v1';
+export const CONSENT_VERSION = '2026-11-v2';
 
 /**
  * First-run consent, in plain language: what LockIn measures, what it keeps,
@@ -12,7 +12,8 @@ export const CONSENT_VERSION = '2026-11-v1';
  */
 export function ConsentScreen() {
   const usesCamera = registry.attention.needsCamera;
-  const [notify, setNotify] = useState(notificationsSupported() && Notification.permission !== 'denied');
+  const [notify, setNotify] = useState(false);
+  const recaps = registry.canRecap();
 
   const agree = async () => {
     if (notify) await askNotificationPermission();
@@ -25,7 +26,7 @@ export function ConsentScreen() {
         <h1 id="consent-title" className="text-[clamp(28px,3vw,40px)]">
           Before you start
         </h1>
-        <p className="mt-3 text-[17px] text-graphite">LockIn notices when your attention leaves the slide and plays a short recap to bring you back. Here is exactly what that involves.</p>
+        <p className="mt-3 text-[17px] text-graphite">Your slides and session reports stay in this browser. Here is what is available for this session.</p>
 
         <dl className="mt-8 grid gap-6 text-[16px] leading-[1.55]">
           <div>
@@ -33,26 +34,28 @@ export function ConsentScreen() {
             <dd className="mt-1 text-graphite">
               {usesCamera
                 ? 'About ten times a second, your webcam is used to estimate whether your eyes are on the slide. LockIn also notices when you switch to another tab or app.'
-                : 'About ten times a second, LockIn receives a focus estimate from the gaze tracker, and notices when you switch to another tab or app.'}
+                : registry.config.attention.mode === 'off'
+                  ? 'Study time, slides visited, and whether this tab is active. Gaze tracking is not connected, so this session will not estimate your attention.'
+                  : 'A connected tracker provides focus estimates. LockIn also notices when this tab is active. Development simulations are labelled and excluded from saved history.'}
             </dd>
           </div>
           <div>
             <dt className="font-semibold">What it keeps</dt>
-            <dd className="mt-1 text-graphite">A focus score from 0 to 100 once a second, which slide you were on, when a recap played and for how long, and your answers to the recap questions.</dd>
+            <dd className="mt-1 text-graphite">Your uploaded PDFs and completed session reports are saved on this device. Focus measurements are included only when a tracker supplies them. Clearing this browser’s site data removes this library.</dd>
           </div>
           <div>
-            <dt className="font-semibold">What it never keeps</dt>
-            <dd className="mt-1 text-graphite">Video, photos or sound. Camera frames are read on this computer and thrown away straight after.</dd>
+            <dt className="font-semibold">AI features</dt>
+            <dd className="mt-1 text-graphite">{recaps ? 'Recap services receive slide text to create narration and questions. A connected personalization service may receive session measurements and quiz answers. This interface does not record camera video.' : 'AI recaps are not connected. You can read slides and save a session report without them. This interface does not record camera video.'}</dd>
           </div>
           <div>
             <dt className="font-semibold">You stay in control</dt>
             <dd className="mt-1 text-graphite">
-              Press <kbd>P</kbd> or the camera dot at any time to pause, and the camera turns fully off. You can delete your session history in Settings. Taking part in the study is voluntary, and you can stop whenever you like.
+              Press <kbd>P</kbd> to pause the session. If the camera is in use, it turns off. Delete saved decks from your library and session history in Settings. You can stop whenever you like.
             </dd>
           </div>
         </dl>
 
-        {notificationsSupported() && Notification.permission !== 'denied' && (
+        {recaps && notificationsSupported() && Notification.permission !== 'denied' && (
           <label className="mt-8 flex items-start gap-3 text-[16px]">
             <input type="checkbox" className="mt-1 h-4 w-4" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
             <span>

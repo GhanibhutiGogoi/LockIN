@@ -24,7 +24,7 @@ export function Gameplay({ loop, dim = false }: { loop?: GameplayLoop; dim?: boo
       />
     );
   }
-  return <ProceduralLoop type={loop?.type ?? 'runner'} dim={dim} />;
+  return (import.meta.env.MODE === 'demo') ? <ProceduralLoop type={loop?.type ?? 'runner'} dim={dim} /> : null;
 }
 
 type Draw = (ctx: CanvasRenderingContext2D, w: number, h: number, t: number, state: Record<string, unknown>) => void;
