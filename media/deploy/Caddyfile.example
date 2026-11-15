@@ -1,0 +1,17 @@
+# Same-origin deployment: build web/, then enter this address in Settings:
+# https://lockin.example.com/media-api/
+# Replace the domain, root and hashed password before use.
+# caddy hash-password prompts for the password; never put it in Vite variables.
+lockin.example.com {
+    basic_auth {
+        student REPLACE_WITH_CADDY_PASSWORD_HASH
+    }
+    handle_path /media-api/* {
+        reverse_proxy 127.0.0.1:8011
+    }
+    handle {
+        root * /srv/lockin/web/dist
+        try_files {path} /index.html
+        file_server
+    }
+}
