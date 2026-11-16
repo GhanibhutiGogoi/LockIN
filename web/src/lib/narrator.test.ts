@@ -72,6 +72,39 @@ describe('narrator mute', () => {
 });
 
 describe('audio narration', () => {
+  it('keeps blocked audio pending, allows another manual attempt, and cannot restart after stop', async () => {
+    class BlockedAudio {
+      muted = false;
+      currentTime = 0;
+      preload = '';
+      onended = null;
+      onerror = null;
+      play = vi.fn(() => Promise.reject(new DOMException('Blocked', 'NotAllowedError')));
+      pause = vi.fn();
+      constructor() { audio = this; }
+    }
+    let audio!: BlockedAudio;
+    Object.assign(globalThis, { Audio: BlockedAudio });
+    const onBlocked = vi.fn();
+    const n = narrate({ ...media(), audioUrl: '/recap.mp3' }, text, { voiceId: 'hype', pacing: 1 }, false, { onBlocked });
+    let done = false;
+    void n.done.then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onBlocked).toHaveBeenCalledTimes(1);
+    expect(n.time()).toBe(0);
+    expect(done).toBe(false);
+    expect(n.error?.()).toBeNull();
+    n.play?.();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onBlocked).toHaveBeenCalledTimes(2);
+    expect(done).toBe(false);
+    n.stop();
+    await n.done;
+    n.play?.();
+    expect(audio.play).toHaveBeenCalledTimes(2);
+    expect(spoken).toHaveLength(0);
+  });
+
   it('reports a failed model audio file without substituting browser speech', async () => {
     let audio!: { onerror: (() => void) | null };
     class FakeAudio {

@@ -35,6 +35,8 @@ import type {
 } from './types';
 
 export type Unsubscribe = () => void;
+/** Cancellation is local transport state, never part of the JSON payload. */
+export interface RequestOptions { signal?: AbortSignal }
 
 // ───────────────────────── 視線追蹤 ─────────────────────────
 
@@ -96,7 +98,7 @@ export interface ContentProvider {
   ingestDeck(file: File): Promise<Deck>;
   /**
    * Write (and fact-check) the brain-rot script + quiz for one slide.
-   * Should be cache-backed: the UI calls this for the current slide and two ahead.
+   * Called only for a triggered recap; the UI never generates ahead while reading.
    */
   getScript(args: {
     deck: Deck;
@@ -105,8 +107,8 @@ export interface ContentProvider {
     profileMemo?: string;
     /** "deeper" = the second clip on the same slide */
     depth: 1 | 2;
-  }): Promise<RescueScript>;
-  /** Optional hint: user is now on this slide; start generating ahead. */
+  }, options?: RequestOptions): Promise<RescueScript>;
+  /** Optional legacy endpoint; the study UI does not send prewarm hints. */
   prewarm?(deckId: string, slideIndex: number): void;
   /** User pressed "that's wrong" on a clip. */
   reportWrongFact?(deckId: string, slideIndex: number, variantId: string, note?: string): void;
@@ -124,7 +126,7 @@ export interface MediaProvider {
     slideIndex: number;
     script: RescueScript;
     variant: Variant;
-  }): Promise<RescueMedia>;
+  }, options?: RequestOptions): Promise<RescueMedia>;
   listGameplayLoops(): Promise<GameplayLoop[]>;
   listMusicBeds(): Promise<MusicBed[]>;
   /** Voices the bandit may choose from. */

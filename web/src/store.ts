@@ -42,6 +42,8 @@ export interface RescueUI {
   error?: string;
   lapseAt: number;
   startedAt?: number;
+  /** A generated pack is waiting for the learner to allow audio playback. */
+  awaitingPlayback?: boolean;
   clipEndedAt?: number;
   skipped: boolean;
   answers: { questionIndex: number; chosen: number; correct: boolean }[];

@@ -1,8 +1,7 @@
 /**
  * Plays narration and reports the current time on the caption clock.
- * Uses media.audioUrl when the video team provides it, and falls back to the
- * browser's speechSynthesis (the mock path) when there is no file or it fails
- * to load, snapping to word-boundary events when the voice supports them.
+ * Uses model audio when provided. Demo speech is separate; real audio errors
+ * never substitute a browser voice. Autoplay denial waits for a manual play.
  *
  * Mute never pauses anything: the caption clock keeps running, so a muted clip
  * ends on time and the next clip isn't affected.
@@ -12,6 +11,8 @@ import { DEMO_MODE } from './features';
 
 export interface Narration {
   error?(): string | null;
+  /** Retry the same audio directly inside a user click, without awaiting first. */
+  play?(): void;
   /** seconds on the caption clock */
   time(): number;
   /** index of the caption word being spoken, from boundary events (−1 if unknown) */
@@ -22,13 +23,18 @@ export interface Narration {
 }
 
 type Voice = Pick<Variant, 'pacing' | 'voiceId'>;
-
-export function narrate(media: RescueMedia, text: string, variant: Voice, muted: boolean, localOnly = false): Narration {
-  if (media.audioUrl && !localOnly) return audioNarration(media, text, variant, muted);
-  return speechNarration(media, text, variant, muted, localOnly);
+export interface PlaybackOptions {
+  localOnly?: boolean;
+  onBlocked?(): void;
+  onPlaying?(): void;
 }
 
-function audioNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean): Narration {
+export function narrate(media: RescueMedia, text: string, variant: Voice, muted: boolean, options: PlaybackOptions = {}): Narration {
+  if (media.audioUrl && !options.localOnly) return audioNarration(media, text, variant, muted, options);
+  return speechNarration(media, text, variant, muted, options.localOnly);
+}
+
+function audioNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean, events: PlaybackOptions): Narration {
   const audio = new Audio(media.audioUrl);
   audio.preload = 'auto';
   audio.muted = muted;
@@ -36,17 +42,17 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
   const done = new Promise<void>((r) => (resolve = r));
   let isMuted = muted;
   let stopped = false;
-  /** Set when the file can't be played: the browser voice takes over. */
+  /** Only the explicit demo mode may substitute browser speech. */
   let fallback: Narration | null = null;
-  /** Set when autoplay was refused: captions run on the clock, silently. */
-  let clockStart: number | null = null;
+  let starting = false;
   let error: string | null = null;
 
   const toSpeech = () => {
-    if (stopped || fallback || clockStart !== null) return;
+    if (stopped || fallback) return;
     audio.onerror = audio.onended = null;
     audio.pause();
     if (!DEMO_MODE) {
+      stopped = true;
       error = 'The narration file could not be played. Check your connection and request the recap again.';
       resolve();
       return;
@@ -54,24 +60,34 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
     fallback = speechNarration(media, text, variant, isMuted);
     void fallback.done.then(resolve);
   };
-  audio.onended = () => resolve();
+  audio.onended = () => { stopped = true; resolve(); };
   audio.onerror = toSpeech;
-  audio.play().catch((err: unknown) => {
+  const rejected = (err: unknown) => {
+    starting = false;
     if (stopped || fallback) return;
     if ((err as DOMException)?.name === 'NotAllowedError') {
-      if (!DEMO_MODE) {
-        error = 'Your browser blocked narration. Allow sound for this site, then request the recap again.';
-        resolve();
-        return;
-      }
-      clockStart = performance.now();
-      setTimeout(() => !stopped && resolve(), media.durationSec * 1000);
+      // Keep the pack, Audio element and completion promise alive. Only the
+      // learner's next click retries play; blocked captions never advance.
+      events.onBlocked?.();
     } else toSpeech();
-  });
+  };
+  const play = () => {
+    if (stopped || fallback || starting) return;
+    starting = true;
+    try {
+      // Deliberately synchronous: preserves the browser's user activation.
+      audio.play().then(() => {
+        starting = false;
+        if (!stopped && !fallback) events.onPlaying?.();
+      }, rejected);
+    } catch (err) { rejected(err); }
+  };
+  play();
 
   return {
     error: () => error,
-    time: () => (fallback ? fallback.time() : clockStart !== null ? (performance.now() - clockStart) / 1000 : audio.currentTime),
+    play,
+    time: () => (fallback ? fallback.time() : audio.currentTime),
     boundaryWord: () => (fallback ? fallback.boundaryWord() : -1),
     stop: () => {
       stopped = true;

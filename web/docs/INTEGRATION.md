@@ -218,13 +218,17 @@ Response (the proposal's output schema):
 ```
 
 - `depth: 2` = the deeper second clip on the same slide (user didn't refocus). Make it shorter and slower.
-- The UI caches by deck · slide · length · slang · humour · quiz count · depth,
-  and asks for the current slide plus two ahead. Respond from your own cache when you can (Gate 2: rescue starts in < 2 s).
+- The UI caches by deck · slide · length · slang · humour · quiz count · depth.
+  Script requests happen only when a manual or automatic recap is triggered,
+  including a second-depth recap. Opening a deck or paging through it sends no
+  slide text or prewarm requests. Respond from your own cache when possible;
+  cold generation latency must be measured on the target hardware.
 - `if_wrong` must include the correction. Roast the answer, never the person.
 - If `variant.slang_level` is `plain` or the slide is sensitive, no slang.
 
-Optional: `POST /decks/{id}/prewarm {"slide_index": n}` and
-`POST /feedback/wrong-fact {"deck_id","slide_index","variant_id","note"}` (the flag button). The flag is a toggle: pressing it
+Optional legacy endpoint: `POST /decks/{id}/prewarm {"slide_index": n}`;
+the study UI does not call it. The flag button calls
+`POST /feedback/wrong-fact {"deck_id","slide_index","variant_id","note"}`. The flag is a toggle: pressing it
 again on the same clip sends the same body with `"retracted": true`, so drop that report.
 
 Example: [`examples/services_stub.py`](../examples/services_stub.py) (content routes).
@@ -265,15 +269,23 @@ Request: `{ "deck_id", "slide_index", "script": RescueScript, "variant": Variant
   The narration audio is the **whole** soundtrack: if you want a music bed,
   mix it (ducked under the voice) into `audio_url`. The UI plays no separate
   music.
-- No `audio_url`, or a file that fails to load ⇒ the UI narrates with the
-  browser's voice on the same captions (that's also the mock).
+- In normal mode, no `audio_url` or an unplayable file is an error; browser
+  speech is reserved for explicit demo mode. If the browser blocks autoplay,
+  the UI retains the pack and offers **Play narration**. That click retries
+  the same audio directly; it does not regenerate the recap. Waiting for the
+  click is excluded from clip duration, and leaving before playback records
+  no played-clip outcome.
 - **B-roll:** `at` is when to cut to it, in seconds from t = 0 of the audio;
   `duration` (seconds, default 2.6) is how long it stays. Without `at`, the UI
   cuts to it for 2.6 s when the caption word matching `term` is spoken.
-- **Latency:** the UI asks for the current slide and two ahead, and starts the
-  shorter `depth: 2` clip for a slide as soon as its first clip starts playing.
-  The voice and pacing are part of the cache key, so each voice/pacing pair is
-  its own request.
+- **Latency:** generation starts only for a triggered recap. The voice and
+  pacing are part of the cache key, so each voice/pacing pair is its own
+  request. Existing operator-prepared server caches can avoid cold inference;
+  the browser does not automatically upload slides to prewarm them.
+- **Connection changes:** both providers are captured when a pack request
+  starts. Changing services aborts HTTP requests and invalidates that cache's
+  results, even for custom providers that ignore cancellation. Optional
+  `RequestOptions.signal` is a second provider-method argument, never JSON.
 
 ### Library
 

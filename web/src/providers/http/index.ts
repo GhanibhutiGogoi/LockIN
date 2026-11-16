@@ -3,7 +3,7 @@
  * the endpoints listed in docs/INTEGRATION.md. Responses are validated against
  * the contracts; problems surface in the Integrations panel.
  */
-import type { AdaptiveProvider, ContentProvider, MediaProvider } from '../../contracts/providers';
+import type { AdaptiveProvider, ContentProvider, MediaProvider, RequestOptions } from '../../contracts/providers';
 import type {
   Deck,
   GameplayLoop,
@@ -40,8 +40,9 @@ export class HttpContentProvider implements ContentProvider {
     deck.slideCount ??= deck.slides?.length ?? 0;
     return assertContract('AI analysis · POST /decks', deck, checkDeck);
   }
-  async getScript(args: { deck: Deck; slide: Slide; variant: Variant; profileMemo?: string; depth: 1 | 2 }): Promise<RescueScript> {
+  async getScript(args: { deck: Deck; slide: Slide; variant: Variant; profileMemo?: string; depth: 1 | 2 }, options?: RequestOptions): Promise<RescueScript> {
     const script = await call<RescueScript>(this.base, '/scripts', {
+      signal: options?.signal,
       body: {
         deckId: args.deck.id,
         slideIndex: args.slide.index,
@@ -73,8 +74,8 @@ export class HttpMediaProvider implements MediaProvider {
   constructor(private base: string) {
     this.name = `HTTP · ${base}`;
   }
-  async renderMedia(args: { deckId: string; slideIndex: number; script: RescueScript; variant: Variant }): Promise<RescueMedia> {
-    const media = await call<RescueMedia>(this.base, '/media', { body: args, timeoutMs: 60_000 });
+  async renderMedia(args: { deckId: string; slideIndex: number; script: RescueScript; variant: Variant }, options?: RequestOptions): Promise<RescueMedia> {
+    const media = await call<RescueMedia>(this.base, '/media', { body: args, timeoutMs: 60_000, signal: options?.signal });
     if (!DEMO_MODE && (!media.audioUrl || media.provenance?.mode === 'mock' || media.provenance?.modelInference === false)) {
       throw new Error('The narration service is not producing model audio yet. You can keep studying while it is being connected.');
     }

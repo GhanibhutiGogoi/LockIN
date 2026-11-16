@@ -46,7 +46,7 @@ export function AIConnectionSettings() {
   return (
     <section className="mb-10 grid gap-4" aria-labelledby="ai-connection-title">
       <h3 id="ai-connection-title" className="text-[17px]">AI connection</h3>
-      <p className="text-[15px] text-graphite">Connect to your local computer or a hosted LockIn API. Slide text is sent there when you use AI recaps.</p>
+      <p className="text-[15px] text-graphite">Connect to your local computer or a hosted LockIn API. Slide text is sent only when a manual or automatic recap starts.</p>
       <form onSubmit={(e) => void connect(e)} className="grid min-w-0 gap-3">
         <label htmlFor="ai-api-url" className="text-[15px] font-semibold">API address</label>
         <input id="ai-api-url" type="url" required className="field w-full min-w-0" value={url}

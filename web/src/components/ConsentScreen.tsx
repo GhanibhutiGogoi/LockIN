@@ -57,7 +57,7 @@ export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }
             <dt className="font-semibold">Frames and recap services</dt>
             <dd className="mt-1 text-graphite">
               Camera frames {screenStudy && 'and shared screen frames '}are processed on this computer and discarded.
-              {!screenStudy && recaps && ' Connected recap services receive slide text and may receive a short study history summary.'}
+              {!screenStudy && recaps && ' When a recap starts, connected recap services receive the selected slide’s text and may receive a short study history summary. Paging through slides does not send their text. A connected personalization service may receive session measurements and quiz answers.'}
             </dd>
           </div>
           <div>
