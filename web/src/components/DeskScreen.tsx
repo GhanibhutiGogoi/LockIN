@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Deck } from '../contracts/types';
+import { shareStudyScreen } from '../lib/screenShare';
 import { buildSampleReport } from '../lib/sampleReport';
 import { registry } from '../providers/registry';
 import { actions, useApp } from '../store';
@@ -10,7 +11,7 @@ import { Wordmark } from './Wordmark';
 
 /*
  * The home of a demo: the name, one sentence on what LockIn does, and two ways
- * in (your own PDF, or the sample deck). Your decks follow once you have some.
+ * in (shared screen or sample deck). Your file decks follow once you have some.
  */
 
 
@@ -26,7 +27,7 @@ export function DeskScreen() {
   const root = useRef<HTMLDivElement>(null);
   useReveal(root);
 
-  const own = decks.filter((d) => d.sourceType !== 'demo');
+  const own = decks.filter((d) => d.sourceType === 'pdf' || d.sourceType === 'pptx');
   const sample = decks.find((d) => d.sourceType === 'demo');
 
   const pick = () => input.current?.click();
@@ -58,7 +59,7 @@ export function DeskScreen() {
         void files.ingest(e.dataTransfer.files[0], study);
       }}
     >
-      <Hero onPick={pick} onSample={trySample} onReport={sampleReport} busy={!!files.busy} />
+      <Hero onShare={(goal) => void shareStudyScreen(false, goal)} onPick={pick} onSample={trySample} onReport={sampleReport} busy={!!files.busy} />
       {own.length > 0 && <YourDecks decks={own} meta={(d) => deckMeta(d, summaries[d.id])} onStudy={study} onPick={pick} />}
 
       <input
@@ -92,7 +93,8 @@ export function DeskScreen() {
 
 // ───────── hero: the name, at night ─────────
 
-function Hero({ onPick, onSample, onReport, busy }: { onPick: () => void; onSample: () => void; onReport: () => void; busy: boolean }) {
+function Hero({ onShare, onPick, onSample, onReport, busy }: { onShare: (goal: string) => void; onPick: () => void; onSample: () => void; onReport: () => void; busy: boolean }) {
+  const [goal, setGoal] = useState('');
   const quiet = 'text-[15px] font-semibold text-graphite transition-colors hover:text-ink';
   return (
     <section className="relative flex min-h-[100svh] flex-col overflow-hidden bg-paper text-ink" aria-labelledby="home-title">
@@ -124,16 +126,34 @@ function Hero({ onPick, onSample, onReport, busy }: { onPick: () => void; onSamp
           {/* what it is, at statement size, in the space the short second line leaves */}
           <div className="home-after max-w-[30ch] pb-[0.6vw] lg:col-span-4 lg:max-w-none">
             <p className="text-[clamp(22px,1.9vw,30px)] leading-[1.25] font-semibold tracking-[-0.01em]">
-              A study app for your lecture slides. When your eyes drift, the slide comes back as a 20-second clip.
+              Study in the app you already use. LockIn checks your shared screen against your study goal.
             </p>
-          <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
-            <button type="button" className="btn btn-primary btn-lg" onClick={onPick} disabled={busy}>
-              Open your slides
-            </button>
-            <button type="button" className="link text-[16px]" onClick={onSample}>
-              Try the sample deck
-            </button>
-          </div>
+            <p className="mt-4 text-[15px] text-graphite">Screen text and activity classification stay on this Mac.</p>
+            <form className="mt-6 grid gap-2" onSubmit={(event) => {
+              event.preventDefault();
+              if (!busy) onShare(goal);
+            }}>
+              <label htmlFor="screen-goal" className="text-[15px] font-semibold">What are you studying? <span className="font-normal text-graphite">(optional)</span></label>
+              <input
+                id="screen-goal" type="text" maxLength={300} value={goal}
+                onChange={(event) => setGoal(event.target.value)}
+                className="min-w-0 rounded-lg border border-rule-strong bg-sheet px-3 py-2.5 text-[16px]"
+                placeholder="Finish the HCI usability testing assignment"
+                aria-describedby="screen-goal-help"
+              />
+              <p id="screen-goal-help" className="text-[13px] text-graphite">LockIn uses your goal to check if the shared page is relevant. Leave it blank for screen reading without page reminders.</p>
+              <button type="submit" className="btn btn-primary btn-lg mt-2 justify-self-start" disabled={busy}>
+                Share your screen
+              </button>
+            </form>
+            <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+              <button type="button" className="link text-[16px]" onClick={onSample}>
+                Try the sample deck
+              </button>
+              <button type="button" className={quiet} onClick={onPick} disabled={busy}>
+                Open a file
+              </button>
+            </div>
           </div>
         </div>
       </div>

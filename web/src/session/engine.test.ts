@@ -3,6 +3,7 @@
  * flows from the review of PR #3. Runs in node with a minimal DOM stand-in.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FocusSample } from '../contracts/types';
 
 const h = vi.hoisted(() => {
   const listeners = new Map<string, Set<() => void>>();
@@ -99,6 +100,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   if (engine.isRunning()) await engine.endSession();
+  Reflect.deleteProperty(registry.attention, 'usesOffscreenRule');
+  Reflect.deleteProperty(registry.attention, 'suspend');
+  Reflect.deleteProperty(registry.attention, 'needsCalibration');
   vi.useRealTimers();
 });
 
@@ -164,6 +168,31 @@ describe('session lifecycle', () => {
     expect(registry.adaptive.endSession).not.toHaveBeenCalled();
   });
 
+  it('releases the camera on pause and reopens a retained provider for setup', async () => {
+    const suspend = vi.fn(() => true);
+    Object.assign(registry.attention, { suspend });
+    await engine.enterStudy();
+    await engine.togglePause();
+    expect(suspend).toHaveBeenCalledOnce();
+    expect(registry.attention.stop).not.toHaveBeenCalled();
+    expect(camera.releaseCamera).toHaveBeenCalled();
+    expect(store.useApp.getState().camera).toBe('paused');
+
+    Object.assign(registry.attention, { needsCalibration: true });
+    await Promise.all([engine.togglePause(), engine.togglePause()]);
+    expect(store.useApp.getState().screen).toBe('setup');
+    await engine.ensureCamera();
+    await engine.ensureAttention();
+    expect(registry.attention.start).toHaveBeenCalledTimes(2);
+    expect(registry.attention.stop).not.toHaveBeenCalled();
+
+    Object.assign(registry.attention, { needsCalibration: false });
+    await engine.enterStudy();
+    expect(store.useApp.getState().live.state).toBe('focused');
+    await engine.endSession();
+    expect(registry.attention.stop).toHaveBeenCalledOnce();
+  });
+
   it('keeps nudge-only when the personal-AI service is down', async () => {
     vi.mocked(registry.adaptive.getSessionConfig).mockRejectedValueOnce(new Error('down'));
     store.useApp.setState({ settings: { ...store.useApp.getState().settings, nudgeOnly: true } });
@@ -171,6 +200,38 @@ describe('session lifecycle', () => {
     await lapseByAppSwitch();
     expect(store.useApp.getState().rescue).toBeNull();
     expect(registry.adaptive.chooseVariant).not.toHaveBeenCalled();
+  });
+});
+
+describe('local gaze diagnostics', () => {
+  it('shows only new source observations and clears stalled evidence', async () => {
+    Object.assign(registry.attention, { usesOffscreenRule: true });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    const t = Date.now();
+    const sample: FocusSample = {
+      t, score: 0, confidence: 1, gazeTracking: { state: 'candidate', awayMs: 11_900, thresholdMs: 30_000 },
+    };
+    emit(sample);
+    await advance(100);
+    expect(store.useApp.getState().live.gazeTracking).toEqual(sample.gazeTracking);
+    emit({ ...sample, gazeTracking: { ...sample.gazeTracking!, awayMs: 29_900 } });
+    await advance(100);
+    expect(store.useApp.getState().live.gazeTracking?.awayMs).toBe(11_900);
+    emit({ ...sample, t: Date.now(), confidence: 0, gazeTracking: { ...sample.gazeTracking!, state: 'unknown' } });
+    await advance(100);
+    expect(store.useApp.getState().live.gazeTracking).toMatchObject({ state: 'unknown', awayMs: 11_900 });
+    await advance(1200);
+    expect(store.useApp.getState().live.gazeTracking).toMatchObject({ state: 'unknown', awayMs: 0 });
+  });
+
+  it('records the qualified gaze reason on the actual rescue', async () => {
+    Object.assign(registry.attention, { usesOffscreenRule: true });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    emit({ t: Date.now(), score: 0, confidence: 1, offscreenLapse: true });
+    await advance(200);
+    expect(store.useApp.getState().rescue).toMatchObject({ trigger: 'gaze', offscreen: true });
   });
 });
 

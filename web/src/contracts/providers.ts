@@ -1,3 +1,4 @@
+import type { TrackerCalibrationDiagnostics } from '../../../gaze-demo/backend/static/gaze.js';
 /**
  * LockIn — the four integration points.
  *
@@ -17,6 +18,9 @@ import type {
   FocusSample,
   GameplayLoop,
   MusicBed,
+  MemoryDecision,
+  MemoryStyle,
+  MemoryTopic,
   RescueContext,
   RescueMedia,
   RescueOutcome,
@@ -36,6 +40,15 @@ export type Unsubscribe = () => void;
 
 export type AttentionStatus = 'stopped' | 'starting' | 'running' | 'error';
 
+export interface CalibrationTarget extends CalibrationPoint {
+  index: number;
+  total: number;
+  validation: boolean;
+  count: number;
+  recheck?: boolean;
+  fallback?: 'geometry' | 'verification';
+}
+
 export interface AttentionProvider {
   readonly name: string;
   /**
@@ -45,6 +58,8 @@ export interface AttentionProvider {
    */
   start(stream: MediaStream | null): Promise<void>;
   stop(): Promise<void>;
+  /** Detach capture while retaining calibration for this study session. */
+  suspend?(): boolean;
   /** Emit ~10 Hz. The UI smooths, applies window focus, and runs the state machine. */
   onSample(cb: (s: FocusSample) => void): Unsubscribe;
   onStatus?(cb: (status: AttentionStatus, detail?: string) => void): Unsubscribe;
@@ -54,6 +69,15 @@ export interface AttentionProvider {
    * study session, so calibration state is never dropped.
    */
   readonly calibrationPoints?: CalibrationPoint[];
+  /** A tracker that owns its calibration and independent validation. */
+  calibrate?(show: (target: CalibrationTarget | null) => void, signal: AbortSignal): Promise<void>;
+  readonly needsCalibration?: boolean;
+  readonly calibrationModel?: 'blazegaze' | 'eyetheia';
+  calibrationDiagnostics?(): TrackerCalibrationDiagnostics | null;
+  prepareCalibration?(): void;
+  skipCalibration?(): void;
+  /** The provider emits an event after its own dwell rule. */
+  readonly usesOffscreenRule?: boolean;
   /** Calibration: the UI shows a dot at `point`, then awaits this promise before moving on. */
   calibratePoint?(point: CalibrationPoint): Promise<void>;
   /** Called once the 20 s normal-reading baseline after the dots is over. */
@@ -109,8 +133,15 @@ export interface MediaProvider {
 
 // ───────────────────────── 個人化 AI ─────────────────────────
 
+export type MemorySource = 'live' | 'replay';
+
 export interface AdaptiveProvider {
   readonly name: string;
+  retrieveMemory?(deckId: string, source: MemorySource, settings: UserSettings, options?: { pending?: { rescueId: string; style: MemoryStyle }[]; allowAnalogy?: boolean; topic?: MemoryTopic }): Promise<{
+    choice: VariantChoice;
+    memo?: string;
+    decision: MemoryDecision;
+  }>;
   /** Per-user thresholds (trigger delay, nudge-first, cooldown…). */
   getSessionConfig(userId: string, settings: UserSettings): Promise<Partial<SessionConfig>>;
   /** Linear Thompson sampling (or whatever) — pick the style for this rescue. */

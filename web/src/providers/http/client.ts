@@ -13,7 +13,7 @@ export class ServiceError extends Error {
 export async function call<T>(
   base: string,
   path: string,
-  init: { method?: string; body?: unknown; form?: FormData; timeoutMs?: number } = {},
+  init: { method?: string; body?: unknown; form?: FormData; timeoutMs?: number; token?: string } = {},
 ): Promise<T> {
   const url = new URL(path.replace(/^\//, ''), base.endsWith('/') ? base : base + '/').toString();
   const ctrl = new AbortController();
@@ -23,7 +23,10 @@ export async function call<T>(
   try {
     res = await fetch(url, {
       method,
-      headers: init.form ? undefined : { 'Content-Type': 'application/json' },
+      headers: {
+        ...(init.form ? {} : { 'Content-Type': 'application/json' }),
+        ...(init.token ? { Authorization: `Bearer ${init.token}` } : {}),
+      },
       body: init.form ?? (init.body !== undefined ? JSON.stringify(snakify(init.body)) : undefined),
       signal: ctrl.signal,
     });

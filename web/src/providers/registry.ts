@@ -7,6 +7,7 @@ import type { AdaptiveProvider, AttentionProvider, ContentProvider, MediaProvide
 import { traced, type Team } from '../lib/devlog';
 import { load, save } from '../lib/storage';
 import { HttpAdaptiveProvider, HttpContentProvider, HttpMediaProvider } from './http';
+import { MemoryAdaptiveProvider } from './memory/adaptive';
 import { MockAdaptiveProvider } from './mock/adaptive';
 import { MockAttentionProvider } from './mock/attention';
 import { MockContentProvider } from './mock/content';
@@ -26,7 +27,7 @@ export const TEAM_INFO: Record<ServiceTeam, { title: string; zh: string; owns: s
   attention: { title: 'Gaze tracking', zh: '視線追蹤', owns: 'Webcam → focus score 0–100, ~10 Hz', modes: ['mock', 'ws'] },
   content: { title: 'AI analysis', zh: 'AI 分析', owns: 'Deck parsing, script + quiz, fact-check', modes: ['mock', 'http'] },
   media: { title: 'Video', zh: '做影片', owns: 'Voice, word timings, b-roll, gameplay library', modes: ['mock', 'http'] },
-  adaptive: { title: 'Personal AI', zh: '個人化 AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['mock', 'http'] },
+  adaptive: { title: 'Personal AI', zh: '個人化 AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['mock', 'http', 'memory'] },
 };
 
 const env = import.meta.env;
@@ -34,7 +35,7 @@ const DEFAULTS: IntegrationConfig = {
   attention: { mode: env.VITE_ATTENTION_PROVIDER ?? 'mock', url: env.VITE_ATTENTION_WS_URL ?? 'ws://localhost:8765' },
   content: { mode: env.VITE_CONTENT_PROVIDER ?? 'mock', url: env.VITE_CONTENT_URL ?? 'http://localhost:8010' },
   media: { mode: env.VITE_MEDIA_PROVIDER ?? 'mock', url: env.VITE_MEDIA_URL ?? 'http://localhost:8011' },
-  adaptive: { mode: env.VITE_ADAPTIVE_PROVIDER ?? 'mock', url: env.VITE_ADAPTIVE_URL ?? 'http://localhost:8012' },
+  adaptive: { mode: env.VITE_ADAPTIVE_PROVIDER ?? (env.DEV ? 'memory' : 'mock'), url: env.VITE_ADAPTIVE_URL ?? 'http://localhost:8012' },
 };
 const KEY = 'lockin.integrations';
 
@@ -96,6 +97,10 @@ class Registry {
     return this.config[team].mode === 'mock';
   }
 
+  clearMemoryHistory() {
+    return new MemoryAdaptiveProvider().clearMemory();
+  }
+
   get attention(): AttentionProvider {
     const c = this.config.attention;
     return (this.cache.attention ??= (() => {
@@ -115,7 +120,7 @@ class Registry {
   }
   get adaptive(): AdaptiveProvider {
     const c = this.config.adaptive;
-    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url) : new MockAdaptiveProvider())) as AdaptiveProvider;
+    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url) : c.mode === 'memory' ? new MemoryAdaptiveProvider() : new MockAdaptiveProvider())) as AdaptiveProvider;
   }
 }
 

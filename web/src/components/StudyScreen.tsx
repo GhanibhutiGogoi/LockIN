@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { shareStudyScreen, stopScreenShare } from '../lib/screenShare';
 import { simulator } from '../providers/mock/attention';
 import { registry } from '../providers/registry';
-import { dismissBreak, endBreak, endSession, enterStudy, onSlideChange, takeBreak, togglePause } from '../session/engine';
+import { dismissBreak, endBreak, endSession, enterStudy, isRunning, onSlideChange, takeBreak, togglePause } from '../session/engine';
 import { actions, useApp, useDeck } from '../store';
 import { CONSENT_VERSION, ConsentScreen } from './ConsentScreen';
 import { FocusGauge } from './FocusGauge';
@@ -20,12 +21,18 @@ export function StudyScreen() {
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<number | null>(null);
   const slide = deck.slides[slideIndex];
+  const screenStudy = deck.sourceType === 'screen';
   const consented = useApp((s) => s.consent === CONSENT_VERSION);
 
   // After consent: the camera (only if the tracker needs it) and the session.
   // enterStudy is single-flight, and resumes a session paused for recalibration.
   useEffect(() => {
-    if (consented) void enterStudy();
+    if (!consented) return;
+    if (!isRunning() && registry.attention.needsCalibration) {
+      actions.go('setup');
+      return;
+    }
+    void enterStudy();
   }, [consented]);
 
   useEffect(() => {
@@ -89,10 +96,10 @@ export function StudyScreen() {
       const target = e.target as HTMLElement;
       if (target.closest('input, textarea, select, [contenteditable]')) return;
       const k = e.key;
-      if (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !target.closest('button'))) {
+      if (!screenStudy && (k === 'ArrowRight' || k === 'PageDown' || (k === ' ' && !target.closest('button')))) {
         e.preventDefault();
         actions.setSlide(useApp.getState().slideIndex + 1);
-      } else if (k === 'ArrowLeft' || k === 'PageUp') {
+      } else if (!screenStudy && (k === 'ArrowLeft' || k === 'PageUp')) {
         e.preventDefault();
         actions.setSlide(useApp.getState().slideIndex - 1);
       } else if (k.toLowerCase() === 'p') void togglePause();
@@ -102,19 +109,19 @@ export function StudyScreen() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [screenStudy]);
 
   const quiet = idle && state === 'focused' && !confirmEnd;
   // drifting doesn't call the toolbar: the edge glow is the only signal, so the slide stays clean
-  const barHidden = !barAwake && !confirmEnd;
+  const barHidden = !screenStudy && !barAwake && !confirmEnd;
 
-  if (!consented) return <ConsentScreen />;
+  if (!consented) return <ConsentScreen screenStudy={screenStudy} />;
 
   return (
     <div className="relative h-full overflow-hidden bg-desk" data-study>
       {/* the slide is the room: chrome floats at the edges and leaves when you read */}
       <main className="absolute inset-0 px-3 pt-16 pb-16 sm:px-6 md:px-20">
-        {slide && <SlideView deck={deck} slide={slide} />}
+        {screenStudy ? <ScreenStudyPanel text={slide?.text} /> : slide && <SlideView deck={deck} slide={slide} />}
       </main>
       {deck.pdfUrl && (
         // a PDF page keeps its own layout, so a phone held upright shows it small
@@ -146,17 +153,79 @@ export function StudyScreen() {
           </div>
         </div>
       </header>
+      <GazeStatus />
 
       {/* after the header in the DOM, so Tab meets camera, settings and Finish first */}
-      <SideNav dir="prev" disabled={slideIndex === 0} quiet={quiet} />
-      <SideNav dir="next" disabled={slideIndex >= deck.slideCount - 1} quiet={quiet} />
-      <DeckRail quiet={quiet} />
+      {screenStudy ? (
+        <div className="absolute bottom-4 left-4"><SimHint /></div>
+      ) : (
+        <>
+          <SideNav dir="prev" disabled={slideIndex === 0} quiet={quiet} />
+          <SideNav dir="next" disabled={slideIndex >= deck.slideCount - 1} quiet={quiet} />
+          <DeckRail quiet={quiet} />
+        </>
+      )}
 
       <div className="drift-glow" data-on={state === 'drifting' || state === 'recovering'} aria-hidden />
       {state === 'paused' && !breakCard && <PausedVeil />}
       {breakCard && !rescue && <BreakCard reason={breakCard.reason} until={breakCard.until} />}
       <Rescue />
     </div>
+  );
+}
+
+function ScreenStudyPanel({ text }: { text?: string }) {
+  const status = useApp((s) => s.screenReading);
+  const goal = useApp((s) => s.screenGoal);
+  const activity = useApp((s) => s.screenActivity);
+  const activityLabel = {
+    related: 'Study-related',
+    'off-topic': 'Possibly off-topic',
+    uncertain: 'Uncertain',
+    unavailable: 'Local activity model unavailable',
+    checking: 'Checking the shared page',
+  };
+  const label = {
+    idle: 'Choose a screen to share.',
+    waiting: 'Screen selected. Finish setup to begin reading.',
+    reading: 'Waiting for text from your shared screen.',
+    ready: 'Reading your shared screen',
+    'no-text': 'No readable text on the shared screen.',
+    'on-lockin': 'Return to your study window to keep reading the shared screen.',
+    paused: 'Screen reading paused',
+    stopped: 'Screen sharing stopped',
+    error: 'Screen text recognition is unavailable. Check the local backend.',
+  }[status];
+  const stopped = status === 'stopped' || status === 'idle';
+  return (
+    <section className="mx-auto mt-10 flex max-h-full w-full max-w-2xl flex-col overflow-y-auto rounded-2xl bg-sheet p-6 sm:mt-16 sm:p-9" aria-labelledby="screen-study-title">
+      <h1 id="screen-study-title" className="text-[clamp(24px,3vw,36px)] font-semibold">LockIn Screen Study</h1>
+      <p role="status" className="mt-3 text-[17px] text-graphite">{label}</p>
+      {goal && (
+        <dl className="mt-5 grid gap-2 text-[15px]">
+          <div className="break-words"><dt className="inline font-semibold">Study goal</dt>{' '}<dd className="inline text-graphite">{goal}</dd></div>
+          {activity && (status === 'ready' || status === 'on-lockin' || status === 'no-text') && (
+            <div>
+              <dt className="inline font-semibold">{status === 'on-lockin' ? 'Last activity check' : 'Activity'}</dt>{' '}
+              <dd className="inline text-graphite" role="status" data-screen-activity={activity}>{activityLabel[activity]}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {text && (status === 'ready' || status === 'on-lockin') && (
+        <div className="mt-5 border-t border-rule-strong pt-4">
+          <h2 className="text-[15px] font-semibold">{status === 'on-lockin' ? 'Last detected text' : 'Detected text'}</h2>
+          <p className="mt-2 line-clamp-8 whitespace-pre-line text-[16px] text-graphite" data-screen-text>{text}</p>
+        </div>
+      )}
+      <button
+        type="button"
+        className="btn btn-quiet btn-sm mt-6 self-start"
+        onClick={stopped ? () => void shareStudyScreen(true) : stopScreenShare}
+      >
+        {stopped ? 'Share a screen' : 'Stop sharing'}
+      </button>
+    </section>
   );
 }
 
@@ -201,13 +270,40 @@ function Elapsed() {
   );
 }
 
+function GazeStatus() {
+  const screenStudy = useDeck().sourceType === 'screen';
+  const gaze = useApp((s) => s.live.gazeTracking);
+  const paused = useApp((s) => s.live.state === 'paused');
+  const camera = useApp((s) => s.camera);
+  if (!registry.attention.usesOffscreenRule) return null;
+
+  const away = gaze && (gaze.state === 'candidate' || gaze.state === 'away');
+  const showTime = gaze && (away || (gaze.state === 'unknown' && gaze.awayMs > 0));
+  const label = paused ? 'Camera paused'
+    : camera !== 'on' ? (screenStudy ? 'Gaze tracking off' : 'App switches only')
+    : !gaze || gaze.state === 'unknown' ? (gaze?.awayMs ? 'Tracking interrupted · timer paused' : 'Tracking interrupted')
+    : away ? 'Looking away'
+    : 'Gaze tracking active';
+  return (
+    <div className="pointer-events-none absolute top-16 right-3 z-20 flex gap-2 rounded-lg bg-sheet px-2.5 py-1.5 text-[12px] text-graphite shadow-sm sm:right-5">
+      <span role="status">{label}</span>
+      {showTime && !paused && camera === 'on' && (
+        <span className="num" aria-label="Valid off-screen time">
+          {Math.floor(Math.min(gaze.awayMs, gaze.thresholdMs) / 1000)} / {gaze.thresholdMs / 1000} s
+        </span>
+      )}
+    </div>
+  );
+}
+
 function useCameraLabel() {
+  const screenStudy = useDeck().sourceType === 'screen';
   const camera = useApp((s) => s.camera);
   const paused = useApp((s) => s.live.state === 'paused');
   const simulated = registry.isMock('attention');
   const label = paused
     ? camera === 'paused' ? 'Camera paused' : 'Tracking paused'
-    : camera === 'on' ? (simulated ? 'Camera on · simulated focus' : 'Camera on · this laptop only') : simulated ? 'Simulated focus' : 'App switches only';
+    : camera === 'on' ? (simulated ? 'Camera on · simulated focus' : 'Camera on · this laptop only') : simulated ? 'Simulated focus' : screenStudy ? 'Gaze tracking off' : 'App switches only';
   const color = paused ? 'var(--pencil)' : camera === 'on' ? 'var(--lapse)' : 'var(--ok)';
   return { label: `${label}. ${paused ? 'Resume' : 'Pause'} (P)`, title: `${label} · P to ${paused ? 'resume' : 'pause'}`, color, paused };
 }
@@ -328,6 +424,7 @@ function RecoveringLine() {
 }
 
 function PausedVeil() {
+  const screenReading = useApp((s) => s.screenReading);
   const camera = useApp((s) => s.camera);
   return (
     <div className="fade-in fixed inset-0 z-40 grid place-items-center bg-paper" role="dialog" aria-modal="true" aria-labelledby="paused-title">
@@ -335,10 +432,13 @@ function PausedVeil() {
         <h2 id="paused-title" className="text-[clamp(28px,3vw,40px)]">
           {camera === 'paused' ? 'Camera paused' : 'Paused'}
         </h2>
-        <p className="mt-3 text-[17px] text-graphite">Nothing is measured, and the clock has stopped.</p>
+        <p className="mt-3 text-[17px] text-graphite">{screenReading === 'paused' ? 'The camera and screen reading are paused. You can also stop sharing now.' : 'Nothing is measured, and the clock has stopped.'}</p>
         <button type="button" className="btn btn-primary btn-lg mt-8" onClick={() => void togglePause()} autoFocus>
           Resume <kbd>P</kbd>
         </button>
+        {screenReading === 'paused' && (
+          <button type="button" className="btn btn-quiet btn-sm mt-3" onClick={stopScreenShare}>Stop sharing</button>
+        )}
       </div>
     </div>
   );

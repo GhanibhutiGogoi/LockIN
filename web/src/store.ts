@@ -1,10 +1,12 @@
 import { create } from 'zustand';
-import type { Deck, FocusState, LapseTrigger, RescueContext, RescuePack, SessionLog, SessionReview, UserSettings, VariantChoice } from './contracts/types';
+import type { Deck, FocusState, GazeTracking, LapseTrigger, MemoryDecision, MemoryTopic, RescueContext, RescuePack, SessionLog, SessionReview, UserSettings, VariantChoice } from './contracts/types';
+import type { ActivityLabel } from './lib/screenActivity';
 import type { CameraStatus } from './lib/camera';
 import { DEMO_DECK } from './lib/demoDeck';
 import { load, save, uid } from './lib/storage';
 
 export type Screen = 'desk' | 'setup' | 'study' | 'report';
+export type ScreenReading = 'idle' | 'waiting' | 'reading' | 'ready' | 'no-text' | 'on-lockin' | 'paused' | 'stopped' | 'error';
 export type Theme = 'system' | 'light' | 'dark';
 
 export interface Live {
@@ -14,6 +16,7 @@ export interface Live {
   /** after window focus */
   effective: number;
   windowActive: boolean;
+  gazeTracking?: GazeTracking;
   /** 0–1 progress toward "refocused" while recovering */
   recoverProgress: number;
   cooldownUntil: number;
@@ -28,9 +31,12 @@ export interface RescueUI {
   id: string;
   phase: 'loading' | 'playing' | 'quiz' | 'error';
   trigger: LapseTrigger;
+  offscreen?: boolean;
   depth: 1 | 2;
   context: RescueContext;
   choice?: VariantChoice;
+  memoryDecision?: MemoryDecision;
+  memoryTopic?: MemoryTopic;
   pack?: RescuePack;
   error?: string;
   lapseAt: number;
@@ -76,6 +82,10 @@ interface AppState {
   spanHistory: { at: number; sec: number }[];
   deckId: string;
   slideIndex: number;
+  screenReading: ScreenReading;
+  screenSeenAt: number | null;
+  screenGoal: string;
+  screenActivity: ActivityLabel | 'checking' | null;
   camera: CameraStatus;
   calibrated: boolean;
   /** Version of the consent screen the user agreed to, or null. */
@@ -124,6 +134,10 @@ export const useApp = create<AppState>(() => ({
   spanHistory: load('lockin.spanHistory', []),
   deckId: DEMO_DECK.id,
   slideIndex: 0,
+  screenReading: 'idle',
+  screenSeenAt: null,
+  screenGoal: '',
+  screenActivity: null,
   camera: 'off',
   calibrated: load('lockin.calibrated', false),
   consent: load<string | null>('lockin.consent', null),
@@ -162,6 +176,41 @@ export const actions = {
   addDeck(deck: Deck) {
     const decks = [deck, ...useApp.getState().decks.filter((d) => d.id !== deck.id)];
     useApp.setState({ decks, deckId: deck.id, slideIndex: 0 });
+  },
+  acceptScreenText(deckId: string, lines: string[], seenAt: number) {
+    const s = useApp.getState();
+    const deck = s.decks.find((item) => item.id === deckId);
+    if (s.deckId !== deckId || deck?.sourceType !== 'screen') return;
+    const text = lines.map((line) => line.trim()).filter(Boolean).join('\n').slice(0, 2400);
+    if (!text) {
+      useApp.setState({ screenReading: 'no-text', screenSeenAt: null, screenActivity: s.screenGoal ? 'uncertain' : null });
+      return;
+    }
+    if (deck.slides.at(-1)?.text === text) {
+      useApp.setState({ screenReading: 'ready', screenSeenAt: seenAt });
+      return;
+    }
+    const index = deck.slides.length;
+    const latest = deck.slides.at(-1);
+    // Keep full text only for the current view and moments used by a recap.
+    const keepPrevious = s.live.state === 'lapse' || (latest && s.live.lapsesBySlide[latest.index]);
+    const slides = latest && !keepPrevious
+      ? [...deck.slides.slice(0, -1), { ...latest, text: '' }]
+      : [...deck.slides];
+    slides.push({ index, title: `Screen moment ${index + 1}`, text });
+    useApp.setState({
+      decks: s.decks.map((item) => item === deck ? { ...deck, slides, slideCount: slides.length } : item),
+      slideIndex: index, screenReading: 'ready', screenSeenAt: seenAt,
+      screenActivity: s.screenGoal ? 'checking' : null,
+    });
+  },
+  discardScreenDecks() {
+    const s = useApp.getState();
+    useApp.setState({
+      decks: s.decks.filter((deck) => deck.sourceType !== 'screen'),
+      deckId: s.decks.find((deck) => deck.id === s.deckId)?.sourceType === 'screen' ? DEMO_DECK.id : s.deckId,
+      slideIndex: 0, report: null, screenReading: 'idle', screenSeenAt: null, screenGoal: '', screenActivity: null,
+    });
   },
   openDeck(deckId: string) {
     useApp.setState({ deckId, slideIndex: 0 });

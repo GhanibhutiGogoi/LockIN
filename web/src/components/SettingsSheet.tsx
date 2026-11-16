@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SlangLevel } from '../contracts/types';
+import { registry } from '../providers/registry';
 import { isRunning, pauseSession } from '../session/engine';
+import { clearPacks } from '../session/packs';
 import { configForSensitivity } from '../session/machine';
 import { actions, useApp, type Theme } from '../store';
+import { CONSENT_VERSION } from './ConsentScreen';
 import { Icon } from './Icon';
 
 const SLANG_SAMPLE: Record<SlangLevel, string> = {
@@ -15,7 +18,7 @@ export function SettingsSheet() {
   const open = useApp((s) => s.settingsOpen);
   const settings = useApp((s) => s.settings);
   const theme = useApp((s) => s.theme);
-  const [clear, setClear] = useState<'idle' | 'confirm' | 'done'>('idle');
+  const [clear, setClear] = useState<'idle' | 'confirm' | 'deleting' | 'done'>('idle');
   const panel = useRef<HTMLDivElement>(null);
   const close = () => useApp.setState({ settingsOpen: false });
 
@@ -154,6 +157,10 @@ export function SettingsSheet() {
                   if (isRunning()) await pauseSession();
                   actions.setCalibrated(false);
                   close();
+                  if (registry.attention.calibrate && useApp.getState().consent !== CONSENT_VERSION) {
+                    actions.go('study');
+                    return;
+                  }
                   actions.go('setup');
                 }}
               >
@@ -162,17 +169,25 @@ export function SettingsSheet() {
               <button
                 type="button"
                 className={`btn justify-start ${clear === 'confirm' ? 'bg-lapse-soft text-ink hover:bg-lapse-soft' : 'btn-quiet'}`}
-                disabled={clear === 'done'}
+                disabled={clear === 'done' || clear === 'deleting' || isRunning()}
                 aria-live="polite"
-                onClick={() => {
+                onClick={async () => {
                   if (clear === 'idle') return setClear('confirm');
-                  actions.clearHistory();
-                  setClear('done');
+                  setClear('deleting');
+                  try {
+                    await registry.clearMemoryHistory();
+                    actions.clearHistory();
+                    clearPacks();
+                    setClear('done');
+                  } catch {
+                    actions.toast('Could not delete the local memory bank. Check the backend and try again.', 'error');
+                    setClear('idle');
+                  }
                 }}
                 onBlur={() => clear === 'confirm' && setClear('idle')}
               >
                 <Icon name={clear === 'done' ? 'check' : 'trash'} size={16} />
-                {clear === 'done' ? 'Session history deleted' : clear === 'confirm' ? 'Press again to delete it for good' : 'Delete my session history'}
+                {clear === 'done' ? 'Session history deleted' : clear === 'deleting' ? 'Deleting history…' : clear === 'confirm' ? 'Press again to delete it for good' : 'Delete my session history'}
               </button>
               <p className="text-[15px] text-graphite">LockIn keeps focus scores and quiz answers, never video.</p>
             </div>

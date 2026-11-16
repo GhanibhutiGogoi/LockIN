@@ -5,3 +5,5 @@ dist
 tsconfig.tsbuildinfo
 .hallmark/
 .taste-skill/
+
+/public/tracker/

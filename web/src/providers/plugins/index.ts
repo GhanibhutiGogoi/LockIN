@@ -11,5 +11,8 @@
  */
 import { registerAttentionPlugin } from '../registry';
 import { CameraTemplateProvider } from './attentionTemplate';
+import { LocalGazeProvider } from './localGaze';
 
 registerAttentionPlugin('camera-template', 'Camera template (face present only)', () => new CameraTemplateProvider());
+registerAttentionPlugin('local-gaze', 'BlazeGaze + MediaPipe', () => new LocalGazeProvider());
+registerAttentionPlugin('eyetheia', 'EyeTheia + MediaPipe', () => new LocalGazeProvider('eyetheia'));

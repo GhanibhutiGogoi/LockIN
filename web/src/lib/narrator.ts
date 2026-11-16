@@ -21,9 +21,9 @@ export interface Narration {
 
 type Voice = Pick<Variant, 'pacing' | 'voiceId'>;
 
-export function narrate(media: RescueMedia, text: string, variant: Voice, muted: boolean): Narration {
-  if (media.audioUrl) return audioNarration(media, text, variant, muted);
-  return speechNarration(media, text, variant, muted);
+export function narrate(media: RescueMedia, text: string, variant: Voice, muted: boolean, localOnly = false): Narration {
+  if (media.audioUrl && !localOnly) return audioNarration(media, text, variant, muted);
+  return speechNarration(media, text, variant, muted, localOnly);
 }
 
 function audioNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean): Narration {
@@ -75,8 +75,9 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
   };
 }
 
-function pickVoice(voiceId: string): SpeechSynthesisVoice | undefined {
-  const voices = speechSynthesis.getVoices().filter((v) => v.lang.startsWith('en'));
+function pickVoice(voiceId: string, localOnly: boolean, text: string): SpeechSynthesisVoice | undefined {
+  const lang = localOnly && /\p{Script=Han}/u.test(text) ? 'zh' : 'en';
+  const voices = speechSynthesis.getVoices().filter((v) => v.lang.startsWith(lang) && (!localOnly || v.localService));
   if (!voices.length) return undefined;
   const local = voices.filter((v) => v.localService);
   const pool = local.length ? local : voices;
@@ -96,10 +97,11 @@ function wordStarts(media: RescueMedia, text: string): number[] {
   return starts;
 }
 
-function speechNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean): Narration {
+function speechNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean, localOnly = false): Narration {
   let resolve!: () => void;
   const done = new Promise<void>((r) => (resolve = r));
-  const hasSpeech = typeof speechSynthesis !== 'undefined' && speechSynthesis.getVoices().length > 0;
+  const voice = typeof speechSynthesis === 'undefined' ? undefined : pickVoice(variant.voiceId, localOnly, text);
+  const hasSpeech = typeof speechSynthesis !== 'undefined' && (localOnly ? !!voice : speechSynthesis.getVoices().length > 0);
   const starts = wordStarts(media, text);
   let t0 = performance.now();
   let boundary = -1;
@@ -125,8 +127,10 @@ function speechNarration(media: RescueMedia, text: string, variant: Voice, muted
   const speakFrom = (fromWord: number) => {
     const offset = starts[fromWord] ?? 0;
     const u = new SpeechSynthesisUtterance(text.slice(offset));
-    const v = pickVoice(variant.voiceId);
-    if (v) u.voice = v;
+    if (voice) {
+      u.voice = voice;
+      if (localOnly) u.lang = voice.lang;
+    }
     u.rate = Math.min(1.6, 1.05 * variant.pacing);
     u.pitch = variant.voiceId === 'chill' ? 0.95 : 1.08;
     u.onstart = () => {

@@ -8,12 +8,15 @@
  * stops (pause, break, end of session), and a provider started for
  * calibration keeps running into the session.
  */
-import type { AttentionProvider } from '../contracts/providers';
-import type { FocusLogEntry, FocusSample, LapseTrigger, RescueContext, RescueOutcome, SessionConfig, SessionLog, Variant, VariantChoice } from '../contracts/types';
+import type { AdaptiveProvider, AttentionProvider, MemorySource } from '../contracts/providers';
+import type { FocusLogEntry, FocusSample, GazeTracking, LapseTrigger, MemoryDecision, MemoryTopic, RescueContext, RescueOutcome, SessionConfig, SessionLog, Variant, VariantChoice } from '../contracts/types';
 import { notifyComeBack, playCue, primeCue, whenVisible } from '../lib/callback';
 import { getStream, releaseCamera, requestCamera, type CameraStatus } from '../lib/camera';
+import { plainText } from '../lib/demoDeck';
 import { devlog } from '../lib/devlog';
+import { hasStudyRecapContext, setScreenReading, stopScreenShare } from '../lib/screenShare';
 import { uid } from '../lib/storage';
+import { MemoryAdaptiveProvider, memoryStyle } from '../providers/memory/adaptive';
 import { registry } from '../providers/registry';
 import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI } from '../store';
 import { DEFAULT_CONFIG, configForSensitivity, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
@@ -22,6 +25,7 @@ import { DEFAULT_VARIANT, getPack, prefetch, prefetchDeeper, setWarmVariant } fr
 
 const TICK_MS = 100;
 const SMOOTH_WINDOW_MS = 1000;
+const GAZE_FRESH_MS = 1200;
 const REWARD_WINDOW_SEC = 60;
 
 interface Pending {
@@ -37,12 +41,18 @@ interface Runtime {
   machine: Machine;
   cfg: SessionConfig;
   samples: { t: number; score: number; eyesOpen: number }[];
+  offscreenLapseAt: number | null;
+  gazeTracking?: { t: number; value: GazeTracking };
   log: FocusLogEntry[];
   outcomes: RescueOutcome[];
   pending: Pending[];
   recentVariants: string[];
   questions: ReviewQuestion[];
   profileMemo?: string;
+  adaptive: AdaptiveProvider;
+  memorySource?: MemorySource;
+  memorySamples: { t: number; focused: boolean }[];
+  memoryWrites: Promise<void>[];
   unsub: (() => void)[];
   timer: number | null;
   lastLogSec: number;
@@ -60,7 +70,10 @@ const sessionSec = (now = Date.now()) => (rt ? (now - rt.machine.sessionStart) /
 // ───────────────────────── camera + provider ownership ─────────────────────────
 
 let liveProvider: AttentionProvider | null = null;
+let providerPaused = false;
+let startingProvider: AttentionProvider | null = null;
 let providerStarting: Promise<void> | null = null;
+let cameraRequest: Promise<CameraStatus> | null = null;
 
 /** Open the camera if, and only if, the active attention provider needs it. */
 export async function ensureCamera(): Promise<CameraStatus> {
@@ -70,41 +83,63 @@ export async function ensureCamera(): Promise<CameraStatus> {
     return useApp.getState().camera;
   }
   if (s.camera === 'on' && getStream()) return 'on';
+  if (cameraRequest) return cameraRequest;
   useApp.setState({ camera: 'asking' });
-  const status = await requestCamera();
-  useApp.setState({ camera: status });
-  return status;
+  const pending = requestCamera().then((status) => {
+    if (cameraRequest !== pending) return 'off' as const;
+    useApp.setState({ camera: status });
+    return status;
+  }).finally(() => { if (cameraRequest === pending) cameraRequest = null; });
+  cameraRequest = pending;
+  return pending;
 }
 
 /** Camera fully off (the hardware light goes out). */
 function cameraOff(next: 'off' | 'paused') {
+  cameraRequest = null;
   releaseCamera();
   const c = useApp.getState().camera;
-  if (c === 'on' || (next === 'off' && c === 'paused')) useApp.setState({ camera: next });
+  if (c === 'on' || c === 'asking' || (next === 'off' && c === 'paused')) useApp.setState({ camera: next });
 }
 
 /** Start the active attention provider unless it is already running. Single-flight. */
 export function ensureAttention(): Promise<void> {
   const p = registry.attention;
-  if (liveProvider === p) return Promise.resolve();
+  if (liveProvider === p && !providerPaused) return Promise.resolve();
   if (providerStarting) return providerStarting;
-  providerStarting = (async () => {
-    try {
-      if (liveProvider) await stopProvider();
-      await p.start(p.needsCamera ? getStream() : null);
-      liveProvider = p;
-    } finally {
-      providerStarting = null;
-    }
+  const previous = liveProvider === p ? null : liveProvider;
+  liveProvider = null;
+  providerPaused = false;
+  startingProvider = p;
+  const operation = (async () => {
+    if (previous) await previous.stop().catch(() => {});
+    if (startingProvider !== p) throw new Error('Attention tracking stopped.');
+    await p.start(p.needsCamera ? getStream() : null);
+    if (startingProvider !== p) throw new Error('Attention tracking stopped.');
+    liveProvider = p;
   })();
+  providerStarting = operation.finally(() => {
+    startingProvider = null;
+    providerStarting = null;
+  });
   return providerStarting;
 }
 
 export async function stopProvider() {
-  if (providerStarting) await providerStarting.catch(() => {});
+  const starting = startingProvider;
+  startingProvider = null;
   const p = liveProvider;
   liveProvider = null;
-  if (p) await p.stop().catch(() => {});
+  providerPaused = false;
+  if (starting) await starting.stop().catch(() => {});
+  if (providerStarting) await providerStarting.catch(() => {});
+  if (p && p !== starting) await p.stop().catch(() => {});
+}
+
+/** Close the camera even if its permission request was still settling. */
+export async function stopCalibrationCamera() {
+  cameraOff('off');
+  await stopProvider();
 }
 
 // ───────────────────────── lifecycle ─────────────────────────
@@ -123,7 +158,9 @@ export function enterStudy(): Promise<void> {
       }
       primeCue();
       const status = await ensureCamera();
-      if (registry.attention.needsCamera && status !== 'on') actions.toast('No camera, so LockIn will only notice when you switch apps.');
+      if (registry.attention.needsCamera && status !== 'on') actions.toast(currentDeck().sourceType === 'screen'
+        ? 'Camera unavailable. You can still see the text LockIn reads.'
+        : 'No camera, so LockIn will only notice when you switch apps.');
       await startSession();
     } finally {
       entering = null;
@@ -136,9 +173,16 @@ async function startSession() {
   if (rt) await teardown();
   const s = useApp.getState();
   const now = Date.now();
+  const screenStudy = currentDeck().sourceType === 'screen';
+  const adaptive = screenStudy && registry.config?.adaptive.mode === 'http'
+    ? new MemoryAdaptiveProvider()
+    : registry.adaptive;
+  const memorySource = adaptive.retrieveMemory
+    ? registry.isMock('attention') ? 'replay' : registry.attention.usesOffscreenRule ? 'live' : undefined
+    : undefined;
   let cfg: SessionConfig;
   try {
-    cfg = { ...DEFAULT_CONFIG, ...(await registry.adaptive.getSessionConfig(s.userId, s.settings)) };
+    cfg = { ...DEFAULT_CONFIG, ...(await adaptive.getSessionConfig(s.userId, s.settings)) };
   } catch {
     // no model: the user's own sensitivity and cooldown still apply
     cfg = { ...configForSensitivity(s.settings.sensitivity), cooldownSec: s.settings.cooldownSec ?? DEFAULT_CONFIG.cooldownSec };
@@ -149,7 +193,7 @@ async function startSession() {
 
   let profileMemo: string | undefined;
   try {
-    profileMemo = await registry.adaptive.getProfileMemo(s.userId);
+    profileMemo = await adaptive.getProfileMemo(s.userId);
   } catch {
     /* optional */
   }
@@ -159,12 +203,17 @@ async function startSession() {
     machine: dispatch(createMachine(now), { type: 'start' }, now, cfg).m,
     cfg,
     samples: [],
+    offscreenLapseAt: null,
     log: [],
     outcomes: [],
     pending: [],
     recentVariants: [],
     questions: [],
     profileMemo,
+    adaptive,
+    memorySource,
+    memorySamples: [],
+    memoryWrites: [],
     unsub: [],
     timer: null,
     lastLogSec: -1,
@@ -172,6 +221,7 @@ async function startSession() {
   };
   useApp.setState({ live: { ...emptyLive(), state: 'focused', startedAt: now, score: 80, effective: 80 }, rescue: null, breakCard: null });
 
+  if (screenStudy) setScreenReading(true);
   await startAttention();
   if (!rt) return;
   rt.timer = window.setInterval(tick, TICK_MS);
@@ -187,6 +237,10 @@ async function startAttention() {
     rt.unsub.push(
       provider.onStatus((status, detail) => {
         devlog.push({ team: 'attention', level: status === 'error' ? 'error' : 'info', label: `status: ${status}`, detail });
+        if (provider.usesOffscreenRule && status === 'error' && detail) {
+          actions.setCalibrated(false);
+          if (liveProvider === provider) actions.toast(detail, 'error');
+        }
       }),
     );
   }
@@ -195,7 +249,9 @@ async function startAttention() {
     devlog.push({ team: 'attention', level: 'ok', label: `started ${provider.name}` });
   } catch (err) {
     devlog.push({ team: 'attention', level: 'error', label: 'start failed', detail: (err as Error).message });
-    actions.toast(`Focus tracking didn't start: ${(err as Error).message}. LockIn will only notice app switches.`, 'error');
+    actions.toast(currentDeck().sourceType === 'screen'
+      ? 'Gaze tracking is unavailable. Screen text recognition can still run.'
+      : `Focus tracking didn't start: ${(err as Error).message}. LockIn will only notice app switches.`, 'error');
   }
 }
 
@@ -205,15 +261,39 @@ function unsubscribe() {
   rt.unsub = [];
 }
 
-async function stopAttention() {
+async function stopAttention(retainCalibration = false) {
+  if (rt) {
+    rt.samples = [];
+    rt.offscreenLapseAt = null;
+    rt.gazeTracking = undefined;
+  }
   unsubscribe();
+  if (retainCalibration && liveProvider === registry.attention && liveProvider.suspend?.()) {
+    providerPaused = true;
+    return;
+  }
   await stopProvider();
+}
+
+registry.subscribe?.(() => {
+  const provider = startingProvider ?? liveProvider;
+  if (!provider?.usesOffscreenRule || provider === registry.attention) return;
+  cameraOff('off');
+  void stopAttention();
+});
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    cameraOff('off');
+    void stopAttention();
+  });
 }
 
 async function teardown() {
   if (!rt) return;
   if (rt.timer !== null) clearInterval(rt.timer);
   rt.timer = null;
+  cameraOff('off');
   await stopAttention();
   if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
   document.title = rt.titleBefore;
@@ -222,10 +302,12 @@ async function teardown() {
 export async function endSession() {
   if (!rt || ending) return;
   ending = true;
+  setScreenReading(false);
+  stopScreenShare();
   const r = rt;
   try {
+    if (r.memorySource && useApp.getState().rescue) leaveRescue();
     await teardown();
-    cameraOff('off');
     const now = Date.now();
     // Flush outcomes whose 60 s window hasn't closed: use what we have.
     for (const p of r.pending) finalizeOutcome(p, true);
@@ -243,10 +325,13 @@ export async function endSession() {
     };
     let review;
     try {
-      review = await registry.adaptive.endSession(log);
+      await Promise.all(r.memoryWrites);
+      review = await r.adaptive.endSession(log);
     } catch {
       review = { score: scoreSession(log.samples, log.rescues) };
-      actions.toast('Personal AI service is unreachable. The report uses local numbers only.', 'error');
+      actions.toast(r.adaptive.retrieveMemory
+        ? 'The memory bank could not confirm this write. The report uses local scores.'
+        : 'Personal AI service is unreachable. The report uses local numbers only.', 'error');
     }
     if (log.samples.length >= 30) actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
     useApp.setState({ report: { deck, log, review, questions: r.questions }, live: emptyLive(), rescue: null, breakCard: null });
@@ -263,9 +348,22 @@ export const isEnding = () => ending;
 // ───────────────────────── input ─────────────────────────
 
 function onSample(s: FocusSample) {
-  if (!rt || s.confidence < 0.3) return;
-  rt.samples.push({ t: Date.now(), score: s.score, eyesOpen: s.signals?.eyesOpen ?? 1 });
-  const cutoff = Date.now() - 3000;
+  if (!rt) return;
+  const now = Date.now();
+  const fresh = Number.isFinite(s.t) && now - s.t >= 0 && now - s.t < GAZE_FRESH_MS;
+  if (s.gazeTracking) {
+    if (!fresh || (rt.gazeTracking && s.t <= rt.gazeTracking.t)) return;
+    rt.gazeTracking = { t: s.t, value: s.gazeTracking };
+    if (s.confidence < 0.3) {
+      rt.samples = [];
+      rt.offscreenLapseAt = null;
+      return;
+    }
+  }
+  if (s.confidence < 0.3) return;
+  if (s.offscreenLapse && fresh) rt.offscreenLapseAt = s.t;
+  rt.samples.push({ t: now, score: s.score, eyesOpen: s.signals?.eyesOpen ?? 1 });
+  const cutoff = now - 3000;
   while (rt.samples.length && rt.samples[0].t < cutoff) rt.samples.shift();
 }
 
@@ -292,27 +390,46 @@ function tick() {
   if (s.live.noteTakingUntil !== null && !noteTaking) useApp.setState({ live: { ...s.live, noteTakingUntil: null } });
 
   const { score, eyesClosed } = smoothed(now);
-  const active = windowActive();
-  const res = step(rt.machine, { now, score, windowActive: active, eyesClosed, noteTaking }, rt.cfg);
+  const screenStudy = currentDeck().sourceType === 'screen';
+  const active = screenStudy || windowActive();
+  const offscreenLapse = rt.offscreenLapseAt !== null && now - rt.offscreenLapseAt >= 0 && now - rt.offscreenLapseAt < GAZE_FRESH_MS;
+  rt.offscreenLapseAt = null;
+  const hasContext = !screenStudy || hasStudyRecapContext(now);
+  const res = step(rt.machine, {
+    now, score: hasContext ? score : null, windowActive: active, eyesClosed, noteTaking,
+    offscreenRule: liveProvider?.usesOffscreenRule,
+    offscreenLapse,
+  }, rt.cfg);
   rt.machine = res.m;
   res.events.forEach(handle);
 
   const m = rt.machine;
   const recoverProgress = m.state === 'recovering' && m.aboveSince !== null ? Math.min(1, (now - m.aboveSince) / 1000 / rt.cfg.recoverFocusedSec) : 0;
 
+  const gaze = rt.gazeTracking;
+  const gazeFresh = gaze && now >= gaze.t && now - gaze.t < GAZE_FRESH_MS;
   // 1 Hz log — raw video never appears here, only derived numbers.
   const sec = Math.floor(sessionSec(now));
   if (sec !== rt.lastLogSec) {
     rt.lastLogSec = sec;
     rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
+    const eligibleState = m.state === 'focused' || m.state === 'drifting' || m.state === 'recovering';
+    const validGaze = gazeFresh && gaze.value.state !== 'unknown' && score !== null;
+    const usable = rt.memorySource === 'live' ? liveProvider === registry.attention && validGaze
+      : rt.memorySource === 'replay' && registry.isMock('attention') && score !== null;
+    if (eligibleState && usable && hasContext) rt.memorySamples.push({ t: sec, focused: m.state === 'focused' && active });
     checkPending(sec);
   }
 
   const live = useApp.getState().live;
+  const gazeTracking = gaze && (gazeFresh
+    ? gaze.value
+    : { ...gaze.value, state: 'unknown' as const, awayMs: 0 });
   useApp.setState({
     live: {
       ...live,
       state: m.state,
+      gazeTracking,
       score: score ?? live.score,
       effective: m.effective,
       windowActive: active,
@@ -323,8 +440,8 @@ function tick() {
   });
 
   // Snap-back, part 1: the tab title calls you back (the cue and notification fire once, in startRescue).
-  const away = !active && (m.state === 'lapse' || m.state === 'rescue');
-  const want = away ? 'Come back to your slides · LockIn' : rt.titleBefore;
+  const away = (screenStudy ? document.hidden : !active) && (m.state === 'lapse' || m.state === 'rescue');
+  const want = away ? (screenStudy ? 'Your screen recap · LockIn' : 'Come back to your slides · LockIn') : rt.titleBefore;
   if (document.title !== want) document.title = want;
 }
 
@@ -335,7 +452,7 @@ function handle(e: MachineEvent) {
       devlog.push({ team: 'ui', level: 'info', label: `${e.from} → ${e.to}` });
       break;
     case 'lapse':
-      void startRescue(e.trigger, e.depth as 1 | 2, e.rescueInRow);
+      void startRescue(e.trigger, e.depth as 1 | 2, e.rescueInRow, e.trigger === 'gaze' && !!liveProvider?.usesOffscreenRule);
       break;
     case 'refocused': {
       // Time to refocus counts from the moment the user is back on the slide (clip and question over).
@@ -374,17 +491,19 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: () => T): Promise<T
 
 const hasQuiz = (r: RescueUI) => (r.pack?.script.quiz.length ?? 0) > 0 && (r.pack?.variant.quizCount ?? 1) > 0;
 
-async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: number) {
+async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: number, offscreen: boolean) {
   if (!rt) return;
   const owner = rt;
   const lapseAt = Date.now();
+  const screenStudy = currentDeck().sourceType === 'screen';
+  const screenSlideIndex = screenStudy ? useApp.getState().slideIndex : undefined;
 
   // Snap-back, part 2: a clip in a hidden tab plays to nobody, and would count
   // toward the rescue cap and A_after. Call the user back, and start the clip
   // when they are here to see it.
   if (document.hidden) {
     playCue();
-    const closeNote = notifyComeBack();
+    const closeNote = notifyComeBack(screenStudy);
     devlog.push({ team: 'ui', level: 'info', label: 'lapse in a hidden tab: rescue held until the tab is visible' });
     await whenVisible();
     closeNote();
@@ -392,12 +511,21 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   }
 
   const s = useApp.getState();
+  if (screenStudy && s.screenReading === 'stopped') {
+    act({ type: 'rescueFinished', clipMs: 0 });
+    return;
+  }
   const deck = currentDeck();
-  const slide = deck.slides[s.slideIndex];
+  const slideIndex = screenSlideIndex ?? s.slideIndex;
+  const slide = deck.slides[slideIndex];
+  if (screenStudy && !slide?.text) {
+    act({ type: 'rescueFinished', clipMs: 0 });
+    return;
+  }
   const context: RescueContext = {
     userId: s.userId,
     deckId: deck.id,
-    slideIndex: s.slideIndex,
+    slideIndex,
     minutesIntoSession: Math.round((s.live.elapsed / 60) * 10) / 10,
     lapseDepth: Math.max(0, Math.min(1, (rt.cfg.enterDrifting - rt.machine.effective) / rt.cfg.enterDrifting)),
     slideDifficulty: slide?.difficulty ?? 0.5,
@@ -409,15 +537,58 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   };
   const id = uid('r_');
   useApp.setState({
-    rescue: { id, phase: 'loading', trigger, depth, context, lapseAt, skipped: false, answers: [] },
-    live: { ...s.live, lapsesBySlide: depth === 1 ? { ...s.live.lapsesBySlide, [s.slideIndex]: (s.live.lapsesBySlide[s.slideIndex] ?? 0) + 1 } : s.live.lapsesBySlide },
+    rescue: { id, phase: 'loading', trigger, offscreen, depth, context, lapseAt, skipped: false, answers: [] },
+    live: { ...s.live, lapsesBySlide: depth === 1 || screenStudy ? { ...s.live.lapsesBySlide, [slideIndex]: (s.live.lapsesBySlide[slideIndex] ?? 0) + 1 } : s.live.lapsesBySlide },
   });
 
-  const choice: VariantChoice = await withTimeout<VariantChoice>(registry.adaptive.chooseVariant(context), 1500, () => ({ variant: fallbackVariant(), isHoldout: false }));
+  const fallback = () => ({ variant: fallbackVariant(), isHoldout: false });
+  let choice: VariantChoice;
+  let profileMemo = owner.profileMemo;
+  let memoryDecision: MemoryDecision | undefined;
+  let memoryTopic: MemoryTopic | undefined;
+  if (owner.adaptive.retrieveMemory && owner.memorySource) {
+    if (slide) {
+      const excerpt = (value: string, limit: number) => Array.from(plainText(value).trim()).slice(0, limit).join('');
+      memoryTopic = {
+        deckTitle: excerpt(deck.title, 200) || 'Untitled deck',
+        slideTitle: excerpt(slide.title, 200) || `Slide ${slide.index + 1}`,
+        slideText: excerpt(slide.text, 360),
+      };
+    }
+    const pending = [...owner.outcomes, ...owner.pending.map(({ outcome }) => outcome)].flatMap((outcome) => {
+      const evidence = outcome.memoryEvidence;
+      if (!evidence || evidence.source !== owner.memorySource || outcome.context.deckId !== deck.id) return [];
+      return [{ rescueId: outcome.rescueId, style: memoryStyle(evidence.variant) }];
+    }).slice(-500);
+    const fallbackChoice = fallback();
+    const memory = await withTimeout(
+      owner.adaptive.retrieveMemory(deck.id, owner.memorySource, s.settings, {
+        pending,
+        topic: memoryTopic,
+        allowAnalogy: deck.sourceType === 'demo' || (deck.sourceType !== 'screen' && !registry.isMock('content')),
+      }), 2300,
+      () => ({
+        choice: fallbackChoice,
+        memo: undefined,
+        decision: {
+          style: memoryStyle(fallbackChoice.variant), reason: 'unavailable' as const,
+          evidenceCount: 0, eligibleByStyle: {},
+          excluded: { skipped: 0, noClip: 0, insufficientRecovery: 0 }, minOutcomesPerStyle: 0,
+        },
+      }),
+    );
+    choice = memory.choice;
+    profileMemo = memory.memo;
+    memoryDecision = memory.decision;
+    devlog.push({ team: 'adaptive', level: 'info', label: 'Memory bank evidence', detail: { count: memory.decision.evidenceCount, related: memory.decision.relatedMemories?.length ?? 0, reason: memory.decision.reason, source: owner.memorySource } });
+  } else {
+    choice = await withTimeout<VariantChoice>(owner.adaptive.chooseVariant(context), 1500, fallback);
+  }
   // the user may have left (Esc) or the session ended while the choice was pending
   if (rt !== owner || useApp.getState().rescue?.id !== id) return;
   let variant = choice.variant;
   if (!s.settings.roastsEnabled && variant.humourStyle === 'roasts') variant = { ...variant, humourStyle: 'memes' };
+  if (memoryDecision) useApp.setState({ rescue: { ...useApp.getState().rescue!, memoryDecision, memoryTopic } });
   rt.recentVariants.push(variant.id);
   setWarmVariant(variant);
 
@@ -425,7 +596,7 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
     // Control arm: a plain reminder instead of a clip.
     act({ type: 'rescueStarted' });
     useApp.setState({ rescue: null });
-    actions.toast('Eyes back on the slide.');
+    actions.toast(screenStudy ? 'Eyes back on your study material.' : 'Eyes back on the slide.');
     const now = Date.now();
     const outcome = makeOutcome(id, context, variant.id, choice.isHoldout, now, now, 0, false, []);
     act({ type: 'rescueFinished', clipMs: 0 });
@@ -434,12 +605,12 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   }
 
   try {
-    const pack = await getPack(deck, s.slideIndex, variant, depth, rt.profileMemo);
+    const pack = await getPack(deck, slideIndex, variant, depth, profileMemo);
     if (rt !== owner || useApp.getState().rescue?.id !== id) return; // user already left
     act({ type: 'rescueStarted' });
     useApp.setState({ rescue: { ...useApp.getState().rescue!, phase: 'playing', pack, choice: { ...choice, variant }, startedAt: Date.now() } });
     // if this one doesn't land, the shorter second clip should be ready
-    if (depth === 1) prefetchDeeper(deck, s.slideIndex, variant, rt.profileMemo);
+    if (depth === 1) prefetchDeeper(deck, slideIndex, variant, profileMemo);
   } catch (err) {
     if (rt !== owner || useApp.getState().rescue?.id !== id) return;
     act({ type: 'rescueStarted' });
@@ -497,6 +668,10 @@ export function finishRescue() {
   const started = r.startedAt ?? now;
   const clipMs = Math.max(0, (r.clipEndedAt ?? now) - started);
   const outcome = makeOutcome(r.id, r.context, r.choice?.variant.id ?? 'none', r.choice?.isHoldout ?? false, started, r.clipEndedAt ?? now, clipMs / 1000, r.skipped, r.answers);
+  if (rt.memorySource && r.pack && r.phase !== 'error') {
+    outcome.memoryEvidence = { source: rt.memorySource, variant: r.pack.script.variant, topic: r.memoryTopic, recoverySamples: 0, focusedShare: null };
+  }
+  if (r.memoryDecision) outcome.memoryDecision = r.memoryDecision;
   rt.pending.push({ outcome, returnedAtSec: sessionSec(now), returnedAt: now });
   r.pack?.script.quiz.slice(0, Math.max(1, r.pack.variant.quizCount)).forEach((q, i) => {
     rt!.questions.push({
@@ -549,27 +724,49 @@ function checkPending(nowSec: number) {
 function finalizeOutcome(p: Pending, partial: boolean) {
   if (!rt) return;
   p.outcome.attentionAfter = focusShare(rt.log, p.returnedAtSec, p.returnedAtSec + REWARD_WINDOW_SEC);
+  const evidence = p.outcome.memoryEvidence;
+  if (evidence) {
+    const usable = rt.memorySamples.filter(({ t }) => t >= p.returnedAtSec && t < p.returnedAtSec + REWARD_WINDOW_SEC);
+    evidence.recoverySamples = usable.length;
+    evidence.focusedShare = usable.length ? usable.filter(({ focused }) => focused).length / usable.length : null;
+  }
   rt.outcomes.push(p.outcome);
-  if (partial && p.outcome.attentionAfter === null) return;
-  registry.adaptive.reportOutcome(p.outcome).catch(() => {});
+  if (partial && (rt.adaptive.retrieveMemory || p.outcome.attentionAfter === null)) return;
+  const write = rt.adaptive.reportOutcome(p.outcome).catch(() => {});
+  if (rt.adaptive.retrieveMemory) rt.memoryWrites.push(write);
 }
 
 // ───────────────────────── user controls ─────────────────────────
 
 /** Pause: tracking stops and the camera goes fully off. */
-async function pause() {
-  if (!rt || rt.machine.state === 'paused') return;
-  if (useApp.getState().rescue) leaveRescue();
-  act({ type: 'pause' });
-  await stopAttention();
+async function pause(retainCalibration = true) {
+  if (!rt) return;
+  if (rt.machine.state !== 'paused') {
+    if (useApp.getState().rescue) leaveRescue();
+    act({ type: 'pause' });
+  } else if (retainCalibration) {
+    return;
+  }
+  if (currentDeck().sourceType === 'screen') setScreenReading(false);
+  const stopping = stopAttention(retainCalibration);
   cameraOff('paused');
+  await stopping;
 }
 
 async function resume() {
-  if (!rt || rt.machine.state !== 'paused') return;
+  const session = rt;
+  if (!session || ending || session.machine.state !== 'paused') return;
+  if (registry.attention.needsCalibration) {
+    actions.go('setup');
+    return;
+  }
   if (useApp.getState().camera === 'paused' || registry.attention.needsCamera) await ensureCamera();
+  if (rt !== session || ending) return;
   await startAttention();
-  act({ type: 'resume' });
+  if (rt === session && !ending) {
+    if (currentDeck().sourceType === 'screen') setScreenReading(true);
+    act({ type: 'resume' });
+  }
 }
 
 export async function togglePause() {
@@ -582,7 +779,7 @@ export async function togglePause() {
 /** Pause before leaving the study screen (recalibration); enterStudy() resumes it. */
 export async function pauseSession() {
   if (!rt || ending) return;
-  await pause();
+  await pause(false);
 }
 
 export function toggleNoteTaking() {

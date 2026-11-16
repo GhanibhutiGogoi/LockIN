@@ -6,11 +6,13 @@ import { SettingsSheet } from './components/SettingsSheet';
 import { SetupScreen } from './components/SetupScreen';
 import { StudyScreen } from './components/StudyScreen';
 import { Toast } from './components/Toast';
+import { flushCalibrationDiagnostics } from './lib/calibrationDiagnostics';
 import { applyTheme, useApp } from './store';
 
 export function App() {
   const screen = useApp((s) => s.screen);
   const theme = useApp((s) => s.theme);
+  useEffect(() => { void flushCalibrationDiagnostics(); }, []);
   useEffect(() => {
     applyTheme(theme);
     // the browser chrome follows a forced theme too, not only the system one

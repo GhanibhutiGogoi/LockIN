@@ -3,6 +3,7 @@ import type { CaptionWord, Deck, GameplayLoop, RescuePack } from '../contracts/t
 import { narrate, type Narration } from '../lib/narrator';
 import { registry } from '../providers/registry';
 import { answerQuiz, clipEnded, finishRescue, skipClip, toggleWrongFact } from '../session/engine';
+import { screenRecapMedia } from '../session/packs';
 import { useApp, useDeck, type RescueUI } from '../store';
 import { Gameplay } from './Gameplay';
 import { Icon } from './Icon';
@@ -16,12 +17,13 @@ import { SlideView } from './SlideView';
 export function Rescue() {
   const rescue = useApp((s) => s.rescue);
   const deck = useDeck();
+  const screenStudy = deck.sourceType === 'screen';
   const [loops, setLoops] = useState<GameplayLoop[]>([]);
   const [muted, setMuted] = useState(false);
 
   useEffect(() => {
-    registry.media.listGameplayLoops().then(setLoops).catch(() => setLoops([]));
-  }, []);
+    (screenStudy ? screenRecapMedia : registry.media).listGameplayLoops().then(setLoops).catch(() => setLoops([]));
+  }, [screenStudy]);
 
   useEffect(() => {
     if (!rescue) return;
@@ -40,6 +42,10 @@ export function Rescue() {
   const slide = deck.slides[rescue.context.slideIndex] ?? deck.slides[0];
   const variant = rescue.choice?.variant;
   const loop = loops.find((l) => l.type === variant?.gameplayType) ?? loops[0];
+  const reason = rescue.trigger === 'window' ? 'Left the study window'
+    : rescue.trigger === 'drowsy' ? 'Eyes closed'
+    : rescue.offscreen ? 'Looked away for 30 seconds'
+    : 'Focus dropped';
 
   return (
     <div className="rescue-in fixed inset-0 z-50 overflow-hidden bg-rot-bg text-rot-ink" role="dialog" aria-modal="true" aria-label="Focus rescue">
@@ -61,7 +67,10 @@ export function Rescue() {
 
           {(rescue.phase === 'loading' || rescue.phase === 'playing') && (
             <>
-              <Corner muted={muted} onMute={() => setMuted((m) => !m)} flag={rescue.phase === 'playing' ? !!rescue.flagged : null} />
+              <p className="absolute top-5 left-3 right-28 z-20 w-fit rounded-md bg-black/70 px-2 py-1 text-xs text-white" role="status">
+                {reason}
+              </p>
+              <Corner muted={muted} onMute={() => setMuted((m) => !m)} flag={!screenStudy && rescue.phase === 'playing' ? !!rescue.flagged : null} />
               <BackButton />
             </>
           )}
@@ -165,7 +174,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   // start narration once; quiz phase keeps the visuals but stops the clock
   useEffect(() => {
     if (quiz) return;
-    const n = narrate(pack.media, text, pack.variant, muted);
+    const n = narrate(pack.media, text, pack.variant, muted, deck.sourceType === 'screen');
     narration.current = n;
     let raf = 0;
     const loopFn = () => {
@@ -217,7 +226,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   const slide = deck.slides[pack.slideIndex];
 
   return (
-    <div className="absolute inset-0">
+    <div className="absolute inset-0" data-recap-playing={!quiz || undefined}>
       {/* top: the slide, slowly pushing in */}
       <div className="absolute inset-x-0 top-0 h-[55%] overflow-hidden bg-[#111]">
         <div
@@ -455,7 +464,7 @@ function ErrorCard({ rescue }: { rescue: RescueUI }) {
   return (
     <div className="absolute inset-0 flex flex-col justify-center gap-4 px-6">
       <p className="rot-caption text-[34px]">No clip this time</p>
-      <p className="text-[15px] leading-snug text-white/80">LockIn couldn’t make a clip for this slide, so here’s the plain version: look back at the slide and read the first line out loud.</p>
+      <p className="text-[15px] leading-snug text-white/80">Look back at your study material and read the first line out loud.</p>
       <details className="text-[12px] text-white/50">
         <summary className="cursor-pointer">What went wrong</summary>
         <p className="mt-1 break-words">{rescue.error}</p>

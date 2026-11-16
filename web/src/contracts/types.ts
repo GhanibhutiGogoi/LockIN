@@ -11,7 +11,7 @@
 
 // ───────────────────────── Deck & slides (AI 分析 owns ingestion) ─────────────────────────
 
-export type SourceType = 'pdf' | 'pptx' | 'demo';
+export type SourceType = 'pdf' | 'pptx' | 'demo' | 'screen';
 
 export interface Slide {
   /** 0-based slide index. */
@@ -167,6 +167,12 @@ export interface FocusSignals {
   facePresent?: number;
 }
 
+export interface GazeTracking {
+  state: 'screen' | 'candidate' | 'away' | 'recovering' | 'unknown';
+  awayMs: number;
+  thresholdMs: number;
+}
+
 export interface FocusSample {
   /** ms since epoch (Date.now()) */
   t: number;
@@ -175,6 +181,9 @@ export interface FocusSample {
   signals?: FocusSignals;
   /** 0–1. Frames below ~0.3 (glare, dim light) are ignored, not scored as drift. */
   confidence: number;
+  /** One fresh event after 30 seconds of valid, calibrated off-screen evidence. */
+  offscreenLapse?: boolean;
+  gazeTracking?: GazeTracking;
   /** Optional on-screen gaze point in viewport-normalised coords 0–1. */
   gazePoint?: { x: number; y: number };
 }
@@ -244,6 +253,35 @@ export interface VariantChoice {
   action?: 'clip' | 'skip';
 }
 
+export type MemoryStyle = 'plain' | 'analogy' | 'humor';
+
+export interface MemoryTopic {
+  deckTitle: string;
+  slideTitle: string;
+  slideText: string;
+}
+
+export interface RelatedMemory {
+  rescueId: string;
+  deckTitle: string;
+  slideTitle: string;
+  style: MemoryStyle;
+  focusedShare: number;
+  similarity: number;
+}
+
+export interface MemoryDecision {
+  style: MemoryStyle;
+  reason: 'rotation' | 'observed_recovery' | 'settings' | 'unavailable';
+  evidenceCount: number;
+  eligibleByStyle: Partial<Record<MemoryStyle, number>>;
+  excluded: { skipped: number; noClip: number; insufficientRecovery: number };
+  minOutcomesPerStyle: number;
+  minRecoverySamples?: number;
+  semanticStatus?: 'embeddinggemma-2' | 'confirmed' | 'no_match' | 'no_topic' | 'no_candidates' | 'unavailable';
+  relatedMemories?: RelatedMemory[];
+}
+
 /** Everything the reward function needs. Logged ~60 s after the user returns. */
 export interface RescueOutcome {
   rescueId: string;
@@ -266,6 +304,14 @@ export interface RescueOutcome {
   timeToRefocusSec: number | null;
   /** Share of the 60 s after returning to the slide spent Focused (A_after). */
   attentionAfter: number | null;
+  memoryDecision?: MemoryDecision;
+  memoryEvidence?: {
+    source: 'live' | 'replay';
+    variant: Pick<Variant, 'slangLevel' | 'humourStyle'>;
+    topic?: MemoryTopic;
+    recoverySamples: number;
+    focusedShare: number | null;
+  };
 }
 
 export interface FocusLogEntry {

@@ -1,4 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
+import type { Deck, MemoryDecision, MemoryStyle, RescueOutcome } from '../contracts/types';
+import { memoryStyle } from '../providers/memory/adaptive';
 import { formatDuration, slidesThatLostYou } from '../session/metrics';
 import { actions, useApp } from '../store';
 import { FocusTimeline } from './FocusTimeline';
@@ -13,6 +15,7 @@ export function ReportScreen() {
   }, [report]);
   if (!report) return null;
   const { deck, log, review, questions } = report;
+  const screenStudy = deck.sourceType === 'screen';
   const sc = review.score;
   const lost = slidesThatLostYou(log.rescues).slice(0, 4);
   const durationSec = (log.endedAt - log.startedAt) / 1000;
@@ -22,6 +25,10 @@ export function ReportScreen() {
   const isSample = log.sessionId === 'sample';
 
   const studyAgain = (slide = 0) => {
+    if (screenStudy) {
+      actions.go('desk');
+      return;
+    }
     actions.openDeck(deck.id);
     actions.setSlide(slide);
     actions.go('study');
@@ -38,7 +45,7 @@ export function ReportScreen() {
         <span className="flex-1" />
         <IntegrationsButton />
         <button type="button" className="btn btn-primary btn-sm ml-1" onClick={() => studyAgain(0)}>
-          Study again
+          {screenStudy ? 'New screen session' : 'Study again'}
         </button>
       </header>
 
@@ -91,7 +98,7 @@ export function ReportScreen() {
 
         <section className="mt-12 grid gap-x-6 gap-y-16 lg:mt-16 lg:grid-cols-12">
           <div className="min-w-0 lg:col-span-5">
-            <h2 className="text-[22px]">Slides that lost you</h2>
+            <h2 className="text-[22px]">{screenStudy ? 'Screen moments recapped' : 'Slides that lost you'}</h2>
             {lost.length ? (
               <ul className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5">
                 {lost.map(({ slideIndex, count }) => (
@@ -103,14 +110,14 @@ export function ReportScreen() {
                       <p className="truncate text-[16px] font-semibold">{deck.slides[slideIndex]?.title}</p>
                       <p className="text-[15px] text-graphite">{count === 1 ? 'once' : `${count} times`}</p>
                     </div>
-                    <button type="button" className="btn btn-quiet btn-sm" onClick={() => studyAgain(slideIndex)} aria-label={`Revisit slide ${slideIndex + 1}: ${deck.slides[slideIndex]?.title ?? ''}`}>
+                    {!screenStudy && <button type="button" className="btn btn-quiet btn-sm" onClick={() => studyAgain(slideIndex)} aria-label={`Revisit slide ${slideIndex + 1}: ${deck.slides[slideIndex]?.title ?? ''}`}>
                       Revisit
-                    </button>
+                    </button>}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="mt-6 text-[17px] text-graphite">None. Your focus held through every slide.</p>
+              <p className="mt-6 text-[17px] text-graphite">{screenStudy ? 'No screen recaps in this session.' : 'None. Your focus held through every slide.'}</p>
             )}
           </div>
 
@@ -149,8 +156,84 @@ export function ReportScreen() {
             )}
           </div>
         </section>
+        <MemoryDecisions rescues={log.rescues} deck={deck} />
       </main>
     </div>
+  );
+}
+
+const styleLabel: Record<MemoryStyle, string> = { plain: 'Direct', analogy: 'Analogy', humor: 'Humor' };
+
+function selectionReason(decision: MemoryDecision) {
+  if (decision.reason === 'unavailable') return 'The memory bank was unavailable. Used the default recap.';
+  if (decision.reason === 'settings') return 'Your settings allow only this style.';
+  if (decision.reason === 'rotation') return `Rotating styles until each has ${decision.minOutcomesPerStyle} usable outcomes.`;
+  return 'This style had the strongest observed recovery after adjusting for sample size.';
+}
+
+function recoveryEvidence(rescue: RescueOutcome, decision: MemoryDecision) {
+  if (rescue.skipped) return 'This recap was skipped.';
+  if (rescue.clipSeconds <= 0) return 'No clip played.';
+  const evidence = rescue.memoryEvidence;
+  if (!evidence || decision.minRecoverySamples === undefined) return undefined;
+  if (evidence.recoverySamples < decision.minRecoverySamples) {
+    return `This recap was excluded · ${evidence.recoverySamples} of ${decision.minRecoverySamples} required recovery samples.`;
+  }
+  return `This recap had ${evidence.recoverySamples} usable recovery samples.`;
+}
+
+function MemoryDecisions({ rescues, deck }: { rescues: RescueOutcome[]; deck: Deck }) {
+  const decisions = rescues.flatMap((rescue) => rescue.memoryDecision ? [{ rescue, decision: rescue.memoryDecision }] : []);
+  if (!decisions.length) return null;
+  return (
+    <section className="mt-16 max-w-3xl" aria-labelledby="memory-decisions">
+      <h2 id="memory-decisions" className="text-[22px]">Why each recap style was chosen</h2>
+      <ol className="mt-5 divide-y divide-rule border-y border-rule">
+        {decisions.map(({ rescue, decision }) => {
+          const history = Object.entries(decision.eligibleByStyle)
+            .map(([style, count]) => `${styleLabel[style as MemoryStyle]} ${count}`).join(' · ');
+          const { skipped, noClip, insufficientRecovery } = decision.excluded;
+          const exclusions = [
+            skipped && `${skipped} skipped`,
+            noClip && `${noClip} no clip played`,
+            insufficientRecovery && `${insufficientRecovery} with too few recovery samples`,
+          ].filter(Boolean).join(' · ');
+          const actual = rescue.memoryEvidence && memoryStyle(rescue.memoryEvidence.variant);
+          const evidence = recoveryEvidence(rescue, decision);
+          return (
+            <li key={rescue.rescueId} className="grid gap-1 py-4 text-[15px]">
+              <p className="font-semibold">{deck.slides[rescue.context.slideIndex]?.title ?? `Slide ${rescue.context.slideIndex + 1}`} · {styleLabel[decision.style]}</p>
+              <p>{selectionReason(decision)}</p>
+              {actual && actual !== decision.style && <p>Recap delivered in {styleLabel[actual].toLowerCase()} style.</p>}
+              {decision.reason !== 'unavailable' && (
+                <>
+                  <p className="text-graphite">{decision.evidenceCount} usable prior {decision.evidenceCount === 1 ? 'outcome' : 'outcomes'}{history && ` · ${history}`}</p>
+                  {exclusions && <p className="text-graphite">Prior outcomes excluded · {exclusions}</p>}
+                </>
+              )}
+              {evidence && <p className="text-graphite">{evidence}</p>}
+              {!!decision.relatedMemories?.length && (
+                <div className="mt-2 text-graphite">
+                  <p className="font-semibold">Related memories from other decks</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {decision.relatedMemories.map((hit) => (
+                      <li key={hit.rescueId}>
+                        {hit.deckTitle} · {hit.slideTitle} · {styleLabel[hit.style]} · {Math.round(hit.focusedShare * 100)}% focused
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1">{decision.semanticStatus === 'confirmed'
+                    ? 'The local relevance model confirmed these topic matches.'
+                    : 'EmbeddingGemma 2 found these by topic.'} This deck’s style counts use its own history.</p>
+                </div>
+              )}
+              {decision.semanticStatus === 'no_match' && <p className="text-graphite">No relevant memories from other decks.</p>}
+              {decision.semanticStatus === 'unavailable' && <p className="text-graphite">Cross-deck search was unavailable.</p>}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
   );
 }
 
@@ -171,9 +254,9 @@ function Delta({ delta }: { delta: number | null }) {
 
 /** What LockIn learned, as one paragraph in one voice — no second tier of tips. */
 function Memo({ memo, tips, quick, className = '' }: { memo?: string; tips?: string[]; quick: boolean; className?: string }) {
-  const text = quick
+  const text = [memo ?? (quick
     ? 'Study for 10 minutes or more and this becomes your attention span.'
-    : [memo ?? 'After a few sessions LockIn will know which clips bring you back fastest.', ...(tips ?? [])].join(' ');
+    : 'After a few sessions LockIn will know which clips bring you back fastest.'), ...(tips ?? [])].join(' ');
   return (
     <p className={`max-w-[48ch] min-w-0 text-[18px] leading-[1.55] lg:col-span-5 lg:pb-2 ${className}`} aria-label="What works for you">
       {text}
