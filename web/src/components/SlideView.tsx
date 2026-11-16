@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Deck, Slide } from '../contracts/types';
-import { renderPage } from '../lib/pdf';
+import { cancelPageRender, renderPage } from '../lib/pdf';
 
 /**
  * Renders one slide at 16:9 (or the PDF page's own aspect), fitted inside its
@@ -51,26 +51,37 @@ export function SlideView({
 function PdfSlide({ url, index, box }: { url: string; index: number; box: { w: number; h: number } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let alive = true;
+    const target = canvas.current;
     setReady(false);
+    setError(false);
     if (canvas.current)
       renderPage(url, index, canvas.current, { width: box.w, height: box.h })
         .then(() => alive && setReady(true))
         .catch((err: Error) => {
-          if (err?.name !== 'RenderingCancelledException') console.warn('Slide render failed', err);
+          if (alive && err?.name !== 'RenderingCancelledException') setError(true);
         });
     return () => {
       alive = false;
+      if (target) cancelPageRender(target);
     };
-  }, [url, index, box.w, box.h]);
+  }, [url, index, box.w, box.h, attempt]);
   return (
+    <>
+    {error && <div role="alert" className="absolute inset-0 grid place-content-center gap-4 p-6 text-center text-[16px]">
+      <p>This slide could not be displayed.</p>
+      <button type="button" className="btn btn-quiet" onClick={() => setAttempt((n) => n + 1)}>Retry slide</button>
+    </div>}
     <canvas
       ref={canvas}
       className="rounded-[var(--r-paper)] bg-white transition-opacity duration-150"
       style={{ opacity: ready ? 1 : 0 }}
       aria-label={`Slide ${index + 1}`}
     />
+    </>
   );
 }
 

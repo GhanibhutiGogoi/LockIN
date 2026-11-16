@@ -1,0 +1,24 @@
+{
+  "deck_id": "model-smoke-test",
+  "slide_index": 0,
+  "script": {
+    "hook": "Your cells have an energy budget.",
+    "script": "Glycolysis breaks one glucose molecule into two pyruvate molecules. It happens in the cytoplasm and gives the cell a net gain of two ATP. Think of it as the opening round: some energy is spent, more comes back, and the cell keeps the profit.",
+    "key_terms": [
+      {"term": "glycolysis", "broll_prompt": "One stylized glucose molecule divides into two smaller groups representing pyruvate. This is a simplified conceptual animation, not an atomically accurate structure."}
+    ],
+    "quiz": [],
+    "plain_summary": "Glycolysis breaks glucose into pyruvate in the cytoplasm, yielding a net two ATP."
+  },
+  "variant": {
+    "id": "hype-mild-20",
+    "target_seconds": 20,
+    "slang_level": "mild",
+    "humour_style": "analogies",
+    "voice_id": "hype",
+    "pacing": 1.1,
+    "gameplay_type": "marble",
+    "recap_or_preview": "recap",
+    "quiz_count": 0
+  }
+}

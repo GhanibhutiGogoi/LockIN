@@ -66,7 +66,7 @@ async function openPage(browser, { fakeWorker = false } = {}) {
       route.fulfill({ contentType: 'text/javascript', body: workerScript }));
   }
   await context.addInitScript(() => {
-    localStorage.setItem('lockin.integrations', JSON.stringify({ attention: { mode: 'local-gaze', url: '' } }));
+    localStorage.setItem('lockin.integrations.demo', JSON.stringify({ attention: { mode: 'local-gaze', url: '' } }));
     const replay = {
       workers: [], streams: [], focused: true, deviceId: 'replay-camera',
       deny: false, deferCamera: false, grantCamera: null, terminated: 0,
@@ -108,7 +108,7 @@ async function openPage(browser, { fakeWorker = false } = {}) {
 
 async function openDeck(page) {
   await page.goto(preview.href);
-  await page.getByRole('button', { name: /Try the sample deck/ }).click();
+  await page.getByRole('button', { name: 'Open development sample' }).click();
   const notifications = page.getByRole('checkbox', { name: /Call me back/ });
   if (await notifications.count()) await notifications.uncheck();
   await page.getByRole('button', { name: 'I agree, start studying' }).click();

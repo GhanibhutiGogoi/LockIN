@@ -16,8 +16,9 @@ import { plainText } from '../lib/demoDeck';
 import { devlog } from '../lib/devlog';
 import { hasStudyRecapContext, setScreenReading, stopScreenShare } from '../lib/screenShare';
 import { uid } from '../lib/storage';
-import { MemoryAdaptiveProvider, memoryStyle } from '../providers/memory/adaptive';
+import { memoryStyle } from '../providers/memory/adaptive';
 import { registry } from '../providers/registry';
+import { LocalAdaptiveProvider } from '../providers/local';
 import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI } from '../store';
 import { DEFAULT_CONFIG, configForSensitivity, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
 import { focusShare, scoreSession } from './metrics';
@@ -37,6 +38,8 @@ interface Pending {
 }
 
 interface Runtime {
+  activity: NonNullable<SessionLog['activity']>;
+  visitedSlides: Set<number>;
   sessionId: string;
   machine: Machine;
   cfg: SessionConfig;
@@ -174,8 +177,8 @@ async function startSession() {
   const s = useApp.getState();
   const now = Date.now();
   const screenStudy = currentDeck().sourceType === 'screen';
-  const adaptive = screenStudy && registry.config?.adaptive.mode === 'http'
-    ? new MemoryAdaptiveProvider()
+  const adaptive: AdaptiveProvider = screenStudy && registry.config?.adaptive.mode === 'http'
+    ? new LocalAdaptiveProvider()
     : registry.adaptive;
   const memorySource = adaptive.retrieveMemory
     ? registry.isMock('attention') ? 'replay' : registry.attention.usesOffscreenRule ? 'live' : undefined
@@ -189,7 +192,7 @@ async function startSession() {
     actions.toast('Personal AI service is unreachable, using your own settings.', 'error');
   }
   // the user's own choice always wins over the model
-  cfg.nudgeOnly = !!s.settings.nudgeOnly;
+  cfg.nudgeOnly = !!s.settings.nudgeOnly || (!screenStudy && !registry.canRecap());
 
   let profileMemo: string | undefined;
   try {
@@ -205,6 +208,8 @@ async function startSession() {
     samples: [],
     offscreenLapseAt: null,
     log: [],
+    activity: [],
+    visitedSlides: new Set(screenStudy ? [] : [s.slideIndex]),
     outcomes: [],
     pending: [],
     recentVariants: [],
@@ -315,6 +320,10 @@ export async function endSession() {
 
     const deck = currentDeck();
     const log: SessionLog = {
+      attentionSource: registry.isMock('attention') ? 'simulated' : r.log.length ? 'gaze' : 'unavailable',
+      activeSeconds: useApp.getState().live.elapsed,
+      activity: r.activity,
+      visitedSlides: [...r.visitedSlides],
       sessionId: r.sessionId,
       userId: useApp.getState().userId,
       deckId: deck.id,
@@ -333,8 +342,11 @@ export async function endSession() {
         ? 'The memory bank could not confirm this write. The report uses local scores.'
         : 'Personal AI service is unreachable. The report uses local numbers only.', 'error');
     }
-    if (log.samples.length >= 30) actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
-    useApp.setState({ report: { deck, log, review, questions: r.questions }, live: emptyLive(), rescue: null, breakCard: null });
+    if (deck.sourceType !== 'screen' && log.samples.length >= 30 && log.attentionSource === 'gaze') actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
+    const report = { deck, log, review, questions: r.questions };
+    if (log.attentionSource === 'simulated' || deck.sourceType === 'demo' || deck.sourceType === 'screen') useApp.setState({ report });
+    else await actions.saveReport(report);
+    useApp.setState({ live: emptyLive(), rescue: null, breakCard: null });
     actions.go('report');
   } finally {
     if (rt === r) rt = null;
@@ -391,14 +403,16 @@ function tick() {
 
   const { score, eyesClosed } = smoothed(now);
   const screenStudy = currentDeck().sourceType === 'screen';
-  const active = screenStudy || windowActive();
+  const active = windowActive();
+  const provider = liveProvider ?? registry.attention;
   const offscreenLapse = rt.offscreenLapseAt !== null && now - rt.offscreenLapseAt >= 0 && now - rt.offscreenLapseAt < GAZE_FRESH_MS;
   rt.offscreenLapseAt = null;
   const hasContext = !screenStudy || hasStudyRecapContext(now);
+  // For tab-only sessions, returning to the tab can reset the machine without creating a gaze sample.
+  const controlScore = score ?? (registry.config?.attention.mode === 'off' ? rt.cfg.enterFocused : null);
   const res = step(rt.machine, {
-    now, score: hasContext ? score : null, windowActive: active, eyesClosed, noteTaking,
-    offscreenRule: liveProvider?.usesOffscreenRule,
-    offscreenLapse,
+    now, score: hasContext ? controlScore : null, windowActive: screenStudy || active, eyesClosed, noteTaking,
+    offscreenRule: provider.usesOffscreenRule, offscreenLapse: hasContext && offscreenLapse,
   }, rt.cfg);
   rt.machine = res.m;
   res.events.forEach(handle);
@@ -412,12 +426,13 @@ function tick() {
   const sec = Math.floor(sessionSec(now));
   if (sec !== rt.lastLogSec) {
     rt.lastLogSec = sec;
-    rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
+    if (score !== null) rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
+    rt.activity.push({ t: sec, slideIndex: s.slideIndex, windowActive: active, paused: m.state === 'paused' || m.state === 'break' });
     const eligibleState = m.state === 'focused' || m.state === 'drifting' || m.state === 'recovering';
     const validGaze = gazeFresh && gaze.value.state !== 'unknown' && score !== null;
     const usable = rt.memorySource === 'live' ? liveProvider === registry.attention && validGaze
       : rt.memorySource === 'replay' && registry.isMock('attention') && score !== null;
-    if (eligibleState && usable && hasContext) rt.memorySamples.push({ t: sec, focused: m.state === 'focused' && active });
+    if (eligibleState && usable && hasContext) rt.memorySamples.push({ t: sec, focused: m.state === 'focused' && (screenStudy || active) });
     checkPending(sec);
   }
 
@@ -428,11 +443,12 @@ function tick() {
   useApp.setState({
     live: {
       ...live,
+      attentionAvailable: score !== null,
       state: m.state,
       gazeTracking,
       score: score ?? live.score,
       effective: m.effective,
-      windowActive: active,
+      windowActive: screenStudy || active,
       recoverProgress,
       cooldownUntil: m.cooldownUntil,
       elapsed: (now - m.sessionStart - m.pausedMs - (m.pausedAt ? now - m.pausedAt : 0)) / 1000,
@@ -457,6 +473,7 @@ function handle(e: MachineEvent) {
     case 'refocused': {
       // Time to refocus counts from the moment the user is back on the slide (clip and question over).
       const now = Date.now();
+      if (smoothed(now).score === null) break;
       for (const p of rt.pending) if (p.outcome.timeToRefocusSec === null) p.outcome.timeToRefocusSec = Math.round((now - p.returnedAt) / 100) / 10;
       break;
     }
@@ -538,7 +555,9 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   const id = uid('r_');
   useApp.setState({
     rescue: { id, phase: 'loading', trigger, offscreen, depth, context, lapseAt, skipped: false, answers: [] },
-    live: { ...s.live, lapsesBySlide: depth === 1 || screenStudy ? { ...s.live.lapsesBySlide, [slideIndex]: (s.live.lapsesBySlide[slideIndex] ?? 0) + 1 } : s.live.lapsesBySlide },
+    live: { ...s.live, lapsesBySlide: trigger !== 'manual' && (depth === 1 || screenStudy)
+      ? { ...s.live.lapsesBySlide, [slideIndex]: (s.live.lapsesBySlide[slideIndex] ?? 0) + 1 }
+      : s.live.lapsesBySlide },
   });
 
   const fallback = () => ({ variant: fallbackVariant(), isHoldout: false });
@@ -618,6 +637,19 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   }
 }
 
+/** A user-requested recap works independently of a gaze tracker. */
+export function requestRecap() {
+  if (!rt || ending || !registry.canRecap() || useApp.getState().rescue) return;
+  const slide = currentDeck().slides[useApp.getState().slideIndex];
+  if (!slide?.text.trim()) { actions.toast('This slide has no readable text. Use a PDF with selectable text for AI recaps.', 'error'); return; }
+  act({ type: 'requestRescue' });
+}
+
+export function playbackFailed(message: string) {
+  const rescue = useApp.getState().rescue;
+  if (rescue) useApp.setState({ rescue: { ...rescue, phase: 'error', error: message } });
+}
+
 /** Narration finished. */
 export function clipEnded() {
   const r = useApp.getState().rescue;
@@ -664,11 +696,16 @@ export function answerQuiz(questionIndex: number, chosen: number) {
 export function finishRescue() {
   const r = useApp.getState().rescue;
   if (!r || !rt) return;
+  if (!r.pack || r.phase === 'error') {
+    useApp.setState({ rescue: null });
+    act({ type: 'rescueFinished', clipMs: 0 });
+    return;
+  }
   const now = Date.now();
   const started = r.startedAt ?? now;
   const clipMs = Math.max(0, (r.clipEndedAt ?? now) - started);
   const outcome = makeOutcome(r.id, r.context, r.choice?.variant.id ?? 'none', r.choice?.isHoldout ?? false, started, r.clipEndedAt ?? now, clipMs / 1000, r.skipped, r.answers);
-  if (rt.memorySource && r.pack && r.phase !== 'error') {
+  if (rt.memorySource) {
     outcome.memoryEvidence = { source: rt.memorySource, variant: r.pack.script.variant, topic: r.memoryTopic, recoverySamples: 0, focusedShare: null };
   }
   if (r.memoryDecision) outcome.memoryDecision = r.memoryDecision;
@@ -809,6 +846,7 @@ export function dismissBreak() {
 
 export function onSlideChange(index: number) {
   if (!rt) return;
+  if (currentDeck().slides[index]) rt.visitedSlides.add(index);
   prefetch(currentDeck(), index, rt.profileMemo);
 }
 

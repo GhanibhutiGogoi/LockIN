@@ -12,7 +12,7 @@ const args = process.argv.slice(2);
 const output = resolve(args[0] ?? join(web, '../evaluation-results/web'));
 const portrait = args[1] && args[1] !== '-' ? resolve(args[1]) : undefined;
 const only = new Set(args.slice(2));
-const cases = ['cross-deck', 'memory-no-match', 'style-rotation', 'gaze-policy', 'model-selector', 'memory-offline'];
+const cases = ['cross-deck', 'memory-no-match', 'style-rotation', 'gaze-policy', 'model-selector', 'memory-offline', 'screen-study'];
 if ([...only].some((name) => !cases.includes(name)) || (only.has('model-selector') && !portrait)) {
   throw new Error('Pass the output directory, portrait path (or -), and optional named replay cases.');
 }
@@ -75,23 +75,21 @@ async function withLocalApp(name, offline, run) {
   try {
     const target = await backend.ready;
     const configPath = join(web, 'vite.config.ts');
-    const { config } = await loadConfigFromFile({ command: 'serve', mode: 'development' }, configPath, web);
+    const { config } = await loadConfigFromFile({ command: 'serve', mode: 'demo' }, configPath, web);
     vite = await createServer({
-      ...config, configFile: false, root: web,
+      ...config, mode: 'demo', configFile: false, root: web,
       server: {
         ...config.server, port: 5181, host: '127.0.0.1', strictPort: true, watch: null,
-        proxy: {
-          '/v1/web-memory': {
-            target, changeOrigin: true,
-            configure(proxy) {
-              proxy.on('proxyReq', (outgoing, request) => {
-                if (request.headers.origin === 'http://127.0.0.1:5181') {
-                  outgoing.setHeader('origin', 'http://127.0.0.1:8000');
-                }
-              });
-            },
+        proxy: Object.fromEntries(['/v1/web-memory', '/v1/web-screen'].map((path) => [path, {
+          target, changeOrigin: true,
+          configure(proxy) {
+            proxy.on('proxyReq', (outgoing, request) => {
+              if (request.headers.origin === 'http://127.0.0.1:5181') {
+                outgoing.setHeader('origin', 'http://127.0.0.1:8000');
+              }
+            });
           },
-        },
+        }])),
       },
     });
     await vite.listen();
@@ -108,6 +106,7 @@ try {
     await replay('memory-no-match', 'replay-cross-deck.mjs', [url, '--no-match']);
     await replay('style-rotation', 'replay-memory.mjs', [url]);
     await replay('gaze-policy', 'replay-gaze.mjs', [url]);
+    if (only.has('screen-study')) await replay('screen-study', 'replay-screen-study.mjs', [url]);
     if (portrait) await replay('model-selector', 'compare-gaze.mjs', [portrait, url]);
   });
   if (!only.size || only.has('memory-offline')) await withLocalApp('offline', true, async (url) => {

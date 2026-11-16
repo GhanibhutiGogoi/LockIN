@@ -10,6 +10,7 @@ import { isRunning } from '../session/engine';
 import { DEFAULT_VARIANT } from '../session/packs';
 import { actions, useApp } from '../store';
 import { Icon } from './Icon';
+import { DEMO_MODE } from '../lib/features';
 
 /**
  * Integrations panel — for the four teams plugging into the UI.
@@ -69,7 +70,7 @@ export function IntegrationsPanel() {
           </div>
           <div className="flex-1 overflow-y-auto">
             <p className="border-b border-rule px-4 py-3 text-graphite">
-              Each team’s module runs as a mock until you point it at your service. Contracts live in <code className="font-mono">src/contracts</code>; wire formats in <code className="font-mono">docs/INTEGRATION.md</code>.
+              Connect the team services here. Offline defaults read PDFs and record tab activity without simulated AI output. Synthetic providers require <code className="font-mono">npm run dev:demo</code>. Wire formats: <code className="font-mono">docs/INTEGRATION.md</code>.
             </p>
             {(Object.keys(TEAM_INFO) as ServiceTeam[]).map((t) => (
               <TeamCard key={t} team={t} mode={config[t].mode} url={config[t].url} />
@@ -280,7 +281,7 @@ function LiveState() {
     <section className="border-b border-rule px-4 py-4">
       <div className="flex items-center justify-between">
         <h3 className="label">Live session</h3>
-        <button
+        {DEMO_MODE && <button
           type="button"
           className="link font-mono text-[12px]"
           onClick={() => {
@@ -289,7 +290,7 @@ function LiveState() {
           }}
         >
           Open example report
-        </button>
+        </button>}
       </div>
       <dl className="mt-2 grid grid-cols-[120px_1fr] gap-y-1 font-mono text-[12px]">
         {rows.map(([k, v]) => (

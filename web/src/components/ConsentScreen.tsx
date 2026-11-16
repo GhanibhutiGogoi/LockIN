@@ -4,7 +4,7 @@ import { registry } from '../providers/registry';
 import { actions } from '../store';
 
 /** Bump when what is measured or kept changes: everyone sees the screen again. */
-export const CONSENT_VERSION = '2026-11-v6';
+export const CONSENT_VERSION = '2026-11-v7';
 
 /**
  * First-run consent, in plain language: what LockIn measures, what it keeps,
@@ -12,7 +12,8 @@ export const CONSENT_VERSION = '2026-11-v6';
  */
 export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }) {
   const usesCamera = registry.attention.needsCamera;
-  const [notify, setNotify] = useState(notificationsSupported() && Notification.permission !== 'denied');
+  const [notify, setNotify] = useState(false);
+  const recaps = registry.canRecap();
 
   const agree = async () => {
     if (notify) await askNotificationPermission();
@@ -25,7 +26,7 @@ export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }
         <h1 id="consent-title" className="text-[clamp(28px,3vw,40px)]">
           Before you start
         </h1>
-        <p className="mt-3 text-[17px] text-graphite">{screenStudy ? 'LockIn compares visible text with your study goal and can gently remind you when the shared page appears unrelated.' : 'LockIn notices when your attention leaves the slide and plays a short recap to bring you back.'}</p>
+        <p className="mt-3 text-[17px] text-graphite">Your slides and session reports stay in this browser. Here is what is available for this session.</p>
 
         <dl className="mt-8 grid gap-6 text-[16px] leading-[1.55]">
           <div>
@@ -33,12 +34,18 @@ export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }
             <dd className="mt-1 text-graphite">
               {screenStudy ? 'LockIn reads visible text and checks it against your goal on this Mac. With the camera calibrated, LockIn also estimates whether you are looking at the display.' : usesCamera
                 ? 'About ten times a second, your webcam is used to estimate whether your eyes are on the slide. LockIn also notices when you switch to another tab or app.'
-                : 'About ten times a second, LockIn receives a focus estimate from the gaze tracker, and notices when you switch to another tab or app.'}
+                : registry.config.attention.mode === 'off'
+                  ? 'Study time, slides visited, and whether this tab is active. Gaze tracking is not connected, so this session will not estimate your attention.'
+                  : 'A connected tracker provides focus estimates. LockIn also notices when this tab is active. Development simulations are labelled and excluded from saved history.'}
             </dd>
           </div>
           <div>
             <dt className="font-semibold">What it keeps</dt>
-            <dd className="mt-1 text-graphite">{screenStudy ? 'Your study goal and activity labels are used for the current session. The local memory bank can keep recap outcomes and a short text excerpt when memory is enabled.' : 'A focus score from 0 to 100 once a second, which slide you were on, when a recap played and for how long, and your answers to the recap questions. With Local memory bank selected, the local service stores recap outcomes, slide titles and a short text excerpt to find related memories across decks. A connected content service receives a short summary when requesting a personalized recap.'}</dd>
+            <dd className="mt-1 text-graphite">
+              {screenStudy
+                ? 'The visible text and activity labels are used for this session. The local memory bank can keep recap outcomes and a short text excerpt when enabled.'
+                : 'Your uploaded PDFs and completed reports are saved in this browser. Reports include focus measurements when available. The local memory bank can keep recap outcomes and a short text excerpt when enabled.'}
+            </dd>
           </div>
           {registry.attention.calibrationModel && (
             <div>
@@ -47,18 +54,21 @@ export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }
             </div>
           )}
           <div>
-            <dt className="font-semibold">What it never keeps</dt>
-            <dd className="mt-1 text-graphite">Video, photos or sound. Camera frames {screenStudy && 'and shared screen frames '}are processed on this computer and discarded.</dd>
+            <dt className="font-semibold">Frames and recap services</dt>
+            <dd className="mt-1 text-graphite">
+              Camera frames {screenStudy && 'and shared screen frames '}are processed on this computer and discarded.
+              {!screenStudy && recaps && ' Connected recap services receive slide text and may receive a short study history summary.'}
+            </dd>
           </div>
           <div>
             <dt className="font-semibold">You stay in control</dt>
             <dd className="mt-1 text-graphite">
-              Press <kbd>P</kbd> or the camera dot at any time to pause, and the camera turns fully off. {screenStudy && 'Screen reading pauses too. Stop sharing in LockIn or your browser to release the screen. '}You can delete your session history in Settings. Taking part in the study is voluntary, and you can stop whenever you like.
+              Press <kbd>P</kbd> to pause. If the camera is in use, it turns off. {screenStudy && 'Stop sharing in LockIn or your browser to release the screen. '}You can delete saved decks from your library and session history in Settings.
             </dd>
           </div>
         </dl>
 
-        {notificationsSupported() && Notification.permission !== 'denied' && (
+        {recaps && notificationsSupported() && Notification.permission !== 'denied' && (
           <label className="mt-8 flex items-start gap-3 text-[16px]">
             <input type="checkbox" className="mt-1 h-4 w-4" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
             <span>

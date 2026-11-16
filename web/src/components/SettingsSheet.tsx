@@ -1,24 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SlangLevel } from '../contracts/types';
-import { registry } from '../providers/registry';
+import { registry, useIntegrationConfig } from '../providers/registry';
 import { isRunning, pauseSession } from '../session/engine';
 import { clearPacks } from '../session/packs';
 import { configForSensitivity } from '../session/machine';
 import { actions, useApp, type Theme } from '../store';
 import { CONSENT_VERSION } from './ConsentScreen';
 import { Icon } from './Icon';
+import { AIConnectionSettings } from './AIConnectionSettings';
 
 const SLANG_SAMPLE: Record<SlangLevel, string> = {
-  plain: 'Glycolysis splits one glucose into two pyruvate molecules in the cytoplasm.',
-  mild: 'Glycolysis splits glucose in two. It happens in the cytoplasm, not the mitochondria.',
-  unhinged: 'POV: you’re a glucose molecule and you just got split in half before even reaching the club.',
+  plain: 'Direct explanations with everyday language.',
+  mild: 'Conversational explanations with light humour.',
+  unhinged: 'Playful explanations with energetic slang.',
 };
 
 export function SettingsSheet() {
+  useIntegrationConfig();
   const open = useApp((s) => s.settingsOpen);
   const settings = useApp((s) => s.settings);
   const theme = useApp((s) => s.theme);
-  const [clear, setClear] = useState<'idle' | 'confirm' | 'deleting' | 'done'>('idle');
+  const hasDeck = useApp((s) => s.decks.some((d) => d.id === s.deckId));
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [clear, setClear] = useState<'idle' | 'confirm' | 'done'>('idle');
   const panel = useRef<HTMLDivElement>(null);
   const close = () => useApp.setState({ settingsOpen: false });
 
@@ -34,7 +39,7 @@ export function SettingsSheet() {
       }
       // keep Tab inside the sheet while it is open
       if (e.key === 'Tab' && panel.current) {
-        const items = [...panel.current.querySelectorAll<HTMLElement>('button:not([disabled]), input, [tabindex]:not([tabindex="-1"])')];
+        const items = [...panel.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')];
         if (!items.length) return;
         const first = items[0];
         const last = items[items.length - 1];
@@ -77,7 +82,9 @@ export function SettingsSheet() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
+          <AIConnectionSettings />
           <Group title="Clips">
+            {!registry.canRecap() && <p className="text-[15px] text-graphite">AI recaps are unavailable on this installation. These preferences apply when they are connected.</p>}
             <Field label="How clips talk" htmlFor="slang">
               <div className="seg w-full" id="slang" role="group">
                 {(['plain', 'mild', 'unhinged'] as SlangLevel[]).map((l) => (
@@ -86,12 +93,12 @@ export function SettingsSheet() {
                   </button>
                 ))}
               </div>
-              <blockquote className="mt-3 rounded-xl bg-raised px-4 py-3 text-[15px]">“{SLANG_SAMPLE[settings.slangLevel]}”</blockquote>
+              <p className="mt-3 text-[15px] text-graphite">{SLANG_SAMPLE[settings.slangLevel]}</p>
             </Field>
             <Toggle
               id="roasts"
               label="Roast wrong answers"
-              hint="Jokes are about the answer, never about you. Sensitive slides always use plain mode."
+              hint="Allow playful feedback about incorrect answers."
               checked={settings.roastsEnabled}
               onChange={(v) => actions.setSettings({ roastsEnabled: v })}
             />
@@ -113,7 +120,7 @@ export function SettingsSheet() {
                 <span>Quick</span>
               </div>
               <p className="mt-2 text-[15px] text-graphite">
-                A clip starts after about <b className="text-ink">{cfg.driftToLapseSec} seconds</b> of looking away, or <b className="text-ink">{cfg.windowInactiveLapseSec} seconds</b> in another app.
+                With the relevant services connected, a recap can start after about <b className="text-ink">{cfg.driftToLapseSec} seconds</b> of looking away, or <b className="text-ink">{cfg.windowInactiveLapseSec} seconds</b> in another app. Changes apply to your next session.
               </p>
             </Field>
             <Toggle
@@ -152,6 +159,7 @@ export function SettingsSheet() {
               <button
                 type="button"
                 className="btn btn-quiet justify-start"
+                disabled={!hasDeck || !registry.attention.calibratePoint}
                 onClick={async () => {
                   // mid-session: pause (tracking off, session kept); the study screen resumes it afterwards
                   if (isRunning()) await pauseSession();
@@ -169,27 +177,30 @@ export function SettingsSheet() {
               <button
                 type="button"
                 className={`btn justify-start ${clear === 'confirm' ? 'bg-lapse-soft text-ink hover:bg-lapse-soft' : 'btn-quiet'}`}
-                disabled={clear === 'done' || clear === 'deleting' || isRunning()}
+                disabled={clear === 'done' || deleting || isRunning()}
                 aria-live="polite"
                 onClick={async () => {
                   if (clear === 'idle') return setClear('confirm');
-                  setClear('deleting');
+                  setDeleting(true);
+                  setDeleteError(null);
                   try {
-                    await registry.clearMemoryHistory();
-                    actions.clearHistory();
+                    await actions.clearHistory();
                     clearPacks();
+                    await registry.clearMemoryHistory();
                     setClear('done');
                   } catch {
-                    actions.toast('Could not delete the local memory bank. Check the backend and try again.', 'error');
-                    setClear('idle');
+                    setDeleteError('Could not finish deleting history. Check browser storage and the local memory service, then try again.');
+                  } finally {
+                    setDeleting(false);
                   }
                 }}
                 onBlur={() => clear === 'confirm' && setClear('idle')}
               >
                 <Icon name={clear === 'done' ? 'check' : 'trash'} size={16} />
-                {clear === 'done' ? 'Session history deleted' : clear === 'deleting' ? 'Deleting history…' : clear === 'confirm' ? 'Press again to delete it for good' : 'Delete my session history'}
+                {clear === 'done' ? 'Session history deleted' : deleting ? 'Deleting history…' : clear === 'confirm' ? 'Press again to delete it for good' : 'Delete my session history'}
               </button>
-              <p className="text-[15px] text-graphite">LockIn keeps focus scores and quiz answers, never video.</p>
+              {deleteError && <p role="alert" className="text-[15px] text-lapse">{deleteError}</p>}
+              <p className="text-[15px] text-graphite">Saved PDFs and reports stay in this browser. History deletion clears saved reports and the local memory bank. Manage records held by other services separately.</p>
             </div>
           </Group>
         </div>

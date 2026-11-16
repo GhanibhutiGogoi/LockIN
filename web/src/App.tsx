@@ -7,11 +7,13 @@ import { SetupScreen } from './components/SetupScreen';
 import { StudyScreen } from './components/StudyScreen';
 import { Toast } from './components/Toast';
 import { flushCalibrationDiagnostics } from './lib/calibrationDiagnostics';
-import { applyTheme, useApp } from './store';
+import { actions, applyTheme, useApp } from './store';
 
 export function App() {
   const screen = useApp((s) => s.screen);
   const theme = useApp((s) => s.theme);
+  const selected = useApp((s) => s.decks.some((d) => d.id === s.deckId));
+  useEffect(() => { void actions.loadLibrary(); }, []);
   useEffect(() => { void flushCalibrationDiagnostics(); }, []);
   useEffect(() => {
     applyTheme(theme);
@@ -27,9 +29,9 @@ export function App() {
 
   return (
     <>
-      {screen === 'desk' && <DeskScreen />}
-      {screen === 'setup' && <SetupScreen />}
-      {screen === 'study' && <StudyScreen />}
+      {(screen === 'desk' || ((screen === 'study' || screen === 'setup') && !selected)) && <DeskScreen />}
+      {screen === 'setup' && selected && <SetupScreen />}
+      {screen === 'study' && selected && <StudyScreen />}
       {screen === 'report' && <ReportScreen />}
       <SettingsSheet />
       <Toast />

@@ -117,6 +117,7 @@ export interface BrollClip {
 }
 
 export interface RescueMedia {
+  provenance?: { mode?: string; modelInference?: boolean; [key: string]: unknown };
   /**
    * Narration audio URL. If absent, the UI falls back to the browser's
    * speechSynthesis using `captions` timing (that's what the mock does).
@@ -206,7 +207,7 @@ export type FocusState =
   | 'break'
   | 'paused';
 
-export type LapseTrigger = 'gaze' | 'window' | 'drowsy';
+export type LapseTrigger = 'gaze' | 'window' | 'drowsy' | 'manual';
 
 /** Thresholds the state machine uses. 個人化 AI may return per-user overrides. */
 export interface SessionConfig {
@@ -323,6 +324,12 @@ export interface FocusLogEntry {
 }
 
 export interface SessionLog {
+  /** Simulated sessions are excluded from normal history. */
+  attentionSource?: 'gaze' | 'simulated' | 'unavailable';
+  activeSeconds?: number;
+  visitedSlides?: number[];
+  /** Tab activity is not an attention estimate. */
+  activity?: { t: number; slideIndex: number; windowActive: boolean; paused: boolean }[];
   sessionId: string;
   userId: string;
   deckId: string;

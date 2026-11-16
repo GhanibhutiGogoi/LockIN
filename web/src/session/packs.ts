@@ -46,6 +46,7 @@ function cached<T>(map: Map<string, Promise<T>>, k: string, make: () => Promise<
 
 export async function getPack(deck: Deck, slideIndex: number, variant: Variant, depth: 1 | 2, profileMemo?: string): Promise<RescuePack> {
   const slide = deck.slides[slideIndex];
+  if (!slide?.text.trim()) throw new Error('This slide has no readable text.');
   if (deck.sourceType === 'screen') {
     const script = await screenContent.getScript({ deck, slide, variant, depth });
     const media = await screenRecapMedia.renderMedia({ script, variant });
@@ -59,7 +60,7 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
 }
 
 export function prefetch(deck: Deck, slideIndex: number, profileMemo?: string) {
-  if (deck.sourceType === 'screen') return;
+  if (deck.sourceType === 'screen' || !registry.canRecap()) return;
   registry.content.prewarm?.(deck.id, slideIndex);
   for (let i = slideIndex; i < Math.min(deck.slideCount, slideIndex + 3); i++) {
     getPack(deck, i, warmVariant, 1, profileMemo).catch(() => {});
@@ -76,3 +77,6 @@ export function clearPacks() {
   scripts.clear();
   medias.clear();
 }
+
+// Service changes cannot reuse an earlier provider's script or audio.
+registry.subscribe(clearPacks);

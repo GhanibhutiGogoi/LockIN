@@ -72,7 +72,7 @@ describe('narrator mute', () => {
 });
 
 describe('audio narration', () => {
-  it('falls back to the browser voice when the audio file fails', async () => {
+  it('reports a failed model audio file without substituting browser speech', async () => {
     let audio!: { onerror: (() => void) | null };
     class FakeAudio {
       muted = false;
@@ -89,8 +89,10 @@ describe('audio narration', () => {
       pause() {}
     }
     Object.assign(globalThis, { Audio: FakeAudio });
-    narrate({ ...media(), audioUrl: '/missing.mp3' }, text, { voiceId: 'hype', pacing: 1 }, false);
+    const narration = narrate({ ...media(), audioUrl: '/missing.mp3' }, text, { voiceId: 'hype', pacing: 1 }, false);
     audio.onerror?.();
-    expect(spoken).toHaveLength(1);
+    await narration.done;
+    expect(narration.error?.()).toContain('could not be played');
+    expect(spoken).toHaveLength(0);
   });
 });

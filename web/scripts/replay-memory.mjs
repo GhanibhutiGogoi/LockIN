@@ -27,7 +27,7 @@ try {
         speak(utterance);
       };
     }
-    localStorage.setItem('lockin.integrations', JSON.stringify({
+    localStorage.setItem('lockin.integrations.demo', JSON.stringify({
       attention: { mode: 'mock', url: '' },
       adaptive: { mode: 'memory', url: '' },
     }));
@@ -40,14 +40,16 @@ try {
   await page.goto(url.href);
 
   async function openStudy() {
-    await page.getByRole('button', { name: /Try the sample deck/ }).click();
+    await page.getByRole('button', { name: 'Open development sample' }).click();
     const consent = page.getByRole('button', { name: 'I agree, start studying' });
+    const finish = page.getByRole('button', { name: 'Finish', exact: true });
+    await consent.or(finish).first().waitFor();
     if (await consent.isVisible()) {
       const notifications = page.getByRole('checkbox', { name: /Call me back/ });
       if (await notifications.count()) await notifications.uncheck();
       await consent.click();
     }
-    await page.getByRole('button', { name: 'Finish', exact: true }).waitFor();
+    await finish.waitFor();
     await page.clock.runFor(1000);
   }
 

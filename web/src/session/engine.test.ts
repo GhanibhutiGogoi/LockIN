@@ -59,6 +59,8 @@ vi.mock('../providers/registry', () => {
       getProfileMemo: vi.fn(async () => undefined),
     },
     isMock: () => false,
+    canRecap: vi.fn(() => true),
+    subscribe: () => () => {},
   };
   return { registry };
 });
@@ -95,6 +97,8 @@ beforeEach(async () => {
   const { DEFAULT_VARIANT } = await import('../contracts/defaults');
   vi.mocked(registry.adaptive.chooseVariant).mockResolvedValue({ variant: DEFAULT_VARIANT, isHoldout: false });
   vi.mocked(registry.adaptive.getSessionConfig).mockResolvedValue({});
+  vi.mocked(registry.canRecap).mockReturnValue(true);
+  store.actions.addDeck({ id: 'uploaded-test', title: 'Uploaded lecture', sourceType: 'pdf', slideCount: 1, slides: [{ index: 0, title: 'Concept', text: 'A lecture slide with readable text.' }] });
   store.useApp.setState({ camera: 'off', settings: { ...store.useApp.getState().settings, nudgeOnly: false } });
 });
 
@@ -113,6 +117,23 @@ async function lapseByAppSwitch() {
 }
 
 describe('session lifecycle', () => {
+  it('records tab activity without inventing focus samples or generating recaps', async () => {
+    vi.mocked(registry.canRecap).mockReturnValue(false);
+    await engine.enterStudy();
+    await advance(1100);
+    await lapseByAppSwitch();
+    h.doc.focused = true;
+    await advance(5000);
+    await engine.endSession();
+    const log = store.useApp.getState().report!.log;
+    expect(log.samples).toEqual([]);
+    expect(log.attentionSource).toBe('unavailable');
+    expect(log.activity?.some((a) => !a.windowActive)).toBe(true);
+    expect(log.visitedSlides).toEqual([0]);
+    expect(log.activeSeconds).toBeGreaterThan(10);
+    expect(registry.media.renderMedia).not.toHaveBeenCalled();
+    expect(registry.adaptive.chooseVariant).not.toHaveBeenCalled();
+  });
   it('enterStudy twice starts one session and one provider', async () => {
     await Promise.all([engine.enterStudy(), engine.enterStudy()]);
     expect(registry.attention.start).toHaveBeenCalledTimes(1);
@@ -236,6 +257,20 @@ describe('local gaze diagnostics', () => {
 });
 
 describe('rescue', () => {
+  it('runs a manually requested recap without labelling it an attention lapse', async () => {
+    await engine.enterStudy();
+    engine.requestRecap();
+    await advance(300);
+    expect(store.useApp.getState().rescue?.context.trigger).toBe('manual');
+    expect(store.useApp.getState().rescue?.phase).toBe('playing');
+    expect(store.useApp.getState().live.lapsesBySlide).toEqual({});
+    engine.clipEnded();
+    engine.answerQuiz(0, 0);
+    engine.finishRescue();
+    await advance(5000);
+    await engine.endSession();
+    expect(store.useApp.getState().report?.log.rescues[0].timeToRefocusSec).toBeNull();
+  });
   it('skipping a clip goes to the question, marked as skipped', async () => {
     await engine.enterStudy();
     await lapseByAppSwitch();
@@ -261,7 +296,7 @@ describe('rescue', () => {
     expect(store.useApp.getState().rescue?.phase).toBe('playing');
   });
 
-  it('control arm: Esc while the choice is pending logs one outcome, not two', async () => {
+  it('Esc while the choice is pending does not count an unplayed recap', async () => {
     let choose!: (c: unknown) => void;
     vi.mocked(registry.adaptive.chooseVariant).mockImplementationOnce(() => new Promise((r) => (choose = r)) as never);
     await engine.enterStudy();
@@ -273,7 +308,7 @@ describe('rescue', () => {
     choose({ variant: DEFAULT_VARIANT, isHoldout: false, action: 'skip' });
     await flush();
     await engine.endSession();
-    expect(store.useApp.getState().report?.log.rescues).toHaveLength(1);
+    expect(store.useApp.getState().report?.log.rescues).toHaveLength(0);
   });
 
   it('time to refocus counts from the return to the slide, not from the lapse', async () => {

@@ -27,7 +27,7 @@ try {
     }
   });
   await context.addInitScript(() => {
-    localStorage.setItem('lockin.integrations', JSON.stringify({
+    localStorage.setItem('lockin.integrations.demo', JSON.stringify({
       attention: { mode: 'mock', url: '' },
       adaptive: { mode: 'memory', url: '' },
     }));
@@ -155,7 +155,12 @@ try {
   assert.equal(await page.evaluate(() => window.screenReplay.trackState()), 'ended');
   assert.deepEqual(errors, []);
   assert.deepEqual(outbound, []);
-  assert.ok(screenResponses.length >= 5 && screenResponses.every((status) => status === 200));
+  // Apple Vision can time out while warming up. Once OCR is serving frames,
+  // it must stay healthy across pause, resume and re-sharing.
+  const firstSuccess = screenResponses.indexOf(200);
+  assert.ok(firstSuccess === 0 || (firstSuccess === 1 && screenResponses[0] === 503), screenResponses.join(', '));
+  const afterWarmup = screenResponses.slice(firstSuccess);
+  assert.ok(afterWarmup.length >= 5 && afterWarmup.every((status) => status === 200), screenResponses.join(', '));
   if (artifacts) await page.screenshot({ path: join(artifacts, 'report.png') });
 
   console.log('PASS: no-file start; real English and Chinese OCR; no app-switch false lapse; blank frame abstention; pause/resume; screen recap and local memory; browser stop, in-app stop, re-share, and report.');

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -74,7 +75,7 @@ try {
       headers,
       data: {
         rescue_id: id, session_id: 'cross-deck-fixture',
-        deck_id: id === 'same-deck' ? `local-Bioenergetics.pdf-${pdfBytes.length}` : id,
+        deck_id: id === 'same-deck' ? 'pdf-' + createHash('sha256').update(pdfBytes).digest('hex') : id,
         source, topic,
         style: id === 'same-deck' ? 'plain' : 'analogy', trigger: 'gaze', clip_seconds: 20, skipped,
         answer_count: 1, correct_count: 1, recovery_samples: 60, focused_share: .8,
@@ -85,7 +86,7 @@ try {
   await context.addInitScript(({ token }) => {
     document.hasFocus = () => true;
     localStorage.setItem('lockin.memoryBankIdentity', JSON.stringify(token));
-    localStorage.setItem('lockin.integrations', JSON.stringify({
+    localStorage.setItem('lockin.integrations.demo', JSON.stringify({
       attention: { mode: 'mock', url: '' },
       adaptive: { mode: 'memory', url: '' },
     }));
@@ -96,7 +97,7 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.clock.install();
   await page.goto(url.href);
-  await page.getByLabel('Open a PDF or PowerPoint').setInputFiles({
+  await page.getByLabel('Open your slides').setInputFiles({
     name: 'Bioenergetics.pdf', mimeType: 'application/pdf', buffer: pdfBytes,
   });
   const notifications = page.getByRole('checkbox', { name: /Call me back/ });

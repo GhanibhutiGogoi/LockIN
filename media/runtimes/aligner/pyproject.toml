@@ -1,0 +1,16 @@
+[project]
+name = "lockin-aligner-runtime"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["lockin-media", "qwen-asr==0.0.6", "torch==2.8.0", "torchaudio==2.8.0"]
+
+[tool.uv.sources]
+lockin-media = { path = "../..", editable = true }
+# This runtime deliberately uses CPU so it doesn't compete with the voice model.
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

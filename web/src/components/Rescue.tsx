@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CaptionWord, Deck, GameplayLoop, RescuePack } from '../contracts/types';
 import { narrate, type Narration } from '../lib/narrator';
+import { DEMO_MODE } from '../lib/features';
 import { registry } from '../providers/registry';
-import { answerQuiz, clipEnded, finishRescue, skipClip, toggleWrongFact } from '../session/engine';
+import { answerQuiz, clipEnded, finishRescue, playbackFailed, skipClip, toggleWrongFact } from '../session/engine';
 import { screenRecapMedia } from '../session/packs';
 import { useApp, useDeck, type RescueUI } from '../store';
 import { Gameplay } from './Gameplay';
@@ -42,7 +43,8 @@ export function Rescue() {
   const slide = deck.slides[rescue.context.slideIndex] ?? deck.slides[0];
   const variant = rescue.choice?.variant;
   const loop = loops.find((l) => l.type === variant?.gameplayType) ?? loops[0];
-  const reason = rescue.trigger === 'window' ? 'Left the study window'
+  const reason = rescue.trigger === 'manual' ? 'Recap requested'
+    : rescue.trigger === 'window' ? 'Left the study window'
     : rescue.trigger === 'drowsy' ? 'Eyes closed'
     : rescue.offscreen ? 'Looked away for 30 seconds'
     : 'Focus dropped';
@@ -191,7 +193,11 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
     raf = requestAnimationFrame(loopFn);
     let cancelled = false;
     n.done.then(() => {
-      if (!cancelled) clipEnded();
+      if (!cancelled) {
+        const error = n.error?.();
+        if (error) playbackFailed(error);
+        else clipEnded();
+      }
     });
     return () => {
       cancelled = true;
@@ -224,11 +230,12 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   const broll = timed ?? (term ? pack.media.broll.find((b) => b.at === undefined && norm(b.term) === norm(term)) : undefined);
   const emphasis = timed?.term ?? term;
   const slide = deck.slides[pack.slideIndex];
+  const hasBackground = !!loop?.url || DEMO_MODE;
 
   return (
     <div className="absolute inset-0" data-recap-playing={!quiz || undefined}>
       {/* top: the slide, slowly pushing in */}
-      <div className="absolute inset-x-0 top-0 h-[55%] overflow-hidden bg-[#111]">
+      <div className={`absolute inset-x-0 top-0 overflow-hidden bg-[#111] ${hasBackground ? 'h-[55%]' : 'h-full'}`}>
         <div
           className="absolute inset-0 grid place-items-center p-3 pt-8"
           style={{
@@ -260,13 +267,13 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
       </div>
 
       {/* bottom: gameplay */}
-      <div className="absolute inset-x-0 bottom-0 h-[45%] overflow-hidden">
+      {hasBackground && <div className="absolute inset-x-0 bottom-0 h-[45%] overflow-hidden">
         <Gameplay loop={loop} dim={quiz} />
-      </div>
+      </div>}
 
       {/* captions straddle the split */}
       {!quiz && chunk && (
-        <div className="pointer-events-none absolute inset-x-0 top-[55%] z-10 -translate-y-1/2 px-6 text-center">
+        <div className={`pointer-events-none absolute inset-x-0 z-10 -translate-y-1/2 px-6 text-center ${hasBackground ? 'top-[55%]' : 'top-[80%]'}`}>
           <p key={chunkIdx} className="rot-caption rot-pop text-[clamp(28px,6.4vh,52px)]">
             {captions.slice(chunk.from, chunk.to + 1).map((w, i) => (
               <span key={i} className={chunk.from + i === wordIdx ? 'now' : undefined}>
@@ -464,7 +471,7 @@ function ErrorCard({ rescue }: { rescue: RescueUI }) {
   return (
     <div className="absolute inset-0 flex flex-col justify-center gap-4 px-6">
       <p className="rot-caption text-[34px]">No clip this time</p>
-      <p className="text-[15px] leading-snug text-white/80">Look back at your study material and read the first line out loud.</p>
+      <p className="text-[16px] leading-relaxed text-white/80">The recap is unavailable. Your slides are still here; return to them and try again when the service is ready.</p>
       <details className="text-[12px] text-white/50">
         <summary className="cursor-pointer">What went wrong</summary>
         <p className="mt-1 break-words">{rescue.error}</p>

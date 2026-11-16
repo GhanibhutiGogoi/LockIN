@@ -109,7 +109,7 @@ try {
   }
   async function startAndSkipCalibration(asset) {
     const requestedAsset = page.waitForResponse(response => response.ok() && new URL(response.url()).pathname.endsWith(asset));
-    await page.getByRole('button', { name: /Try the sample deck/ }).click();
+    await page.getByRole('button', { name: 'Open development sample' }).click();
     const consent = page.getByRole('button', { name: 'I agree, start studying' });
     const calibration = page.getByText('Calibration · 1 of 9', { exact: true });
     await consent.or(calibration).first().waitFor({ timeout: 40_000 });

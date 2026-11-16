@@ -6,6 +6,7 @@
 import type { AdaptiveProvider, AttentionProvider, ContentProvider, MediaProvider } from '../contracts/providers';
 import { traced, type Team } from '../lib/devlog';
 import { load, save } from '../lib/storage';
+import { LocalAdaptiveProvider, LocalContentProvider, NoAttentionProvider, NoMediaProvider } from './local';
 import { HttpAdaptiveProvider, HttpContentProvider, HttpMediaProvider } from './http';
 import { MemoryAdaptiveProvider } from './memory/adaptive';
 import { MockAdaptiveProvider } from './mock/adaptive';
@@ -13,6 +14,8 @@ import { MockAttentionProvider } from './mock/attention';
 import { MockContentProvider } from './mock/content';
 import { MockMediaProvider } from './mock/media';
 import { WsAttentionProvider } from './ws/attention';
+import { useSyncExternalStore } from 'react';
+import { clearAIConnection, savedAIConnection, saveAIConnection, type AIConnection } from './connection';
 
 export type ServiceTeam = 'attention' | 'content' | 'media' | 'adaptive';
 
@@ -20,24 +23,36 @@ export interface ServiceConfig {
   /** 'mock' | 'http' | 'ws' | an in-browser plugin id */
   mode: string;
   url: string;
+  /** False for a scripts-only gateway; PDFs still import in the browser. */
+  deckImport?: boolean;
 }
 export type IntegrationConfig = Record<ServiceTeam, ServiceConfig>;
 
 export const TEAM_INFO: Record<ServiceTeam, { title: string; zh: string; owns: string; modes: string[] }> = {
-  attention: { title: 'Gaze tracking', zh: '視線追蹤', owns: 'Webcam → focus score 0–100, ~10 Hz', modes: ['mock', 'ws'] },
-  content: { title: 'AI analysis', zh: 'AI 分析', owns: 'Deck parsing, script + quiz, fact-check', modes: ['mock', 'http'] },
-  media: { title: 'Video', zh: '做影片', owns: 'Voice, word timings, b-roll, gameplay library', modes: ['mock', 'http'] },
-  adaptive: { title: 'Personal AI', zh: '個人化 AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['mock', 'http', 'memory'] },
+  attention: { title: 'Gaze tracking', zh: '視線追蹤', owns: 'Webcam → focus score 0–100, ~10 Hz', modes: ['off', 'ws', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+  content: { title: 'AI analysis', zh: 'AI 分析', owns: 'Deck parsing, script + quiz, fact-check', modes: ['local', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+  media: { title: 'Video', zh: '做影片', owns: 'Voice, word timings, b-roll, gameplay library', modes: ['off', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+  adaptive: { title: 'Personal AI', zh: '個人化 AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['local', 'http', 'memory', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
 };
 
 const env = import.meta.env;
 const DEFAULTS: IntegrationConfig = {
-  attention: { mode: env.VITE_ATTENTION_PROVIDER ?? 'mock', url: env.VITE_ATTENTION_WS_URL ?? 'ws://localhost:8765' },
-  content: { mode: env.VITE_CONTENT_PROVIDER ?? 'mock', url: env.VITE_CONTENT_URL ?? 'http://localhost:8010' },
-  media: { mode: env.VITE_MEDIA_PROVIDER ?? 'mock', url: env.VITE_MEDIA_URL ?? 'http://localhost:8011' },
-  adaptive: { mode: env.VITE_ADAPTIVE_PROVIDER ?? (env.DEV ? 'memory' : 'mock'), url: env.VITE_ADAPTIVE_URL ?? 'http://localhost:8012' },
+  attention: { mode: env.VITE_ATTENTION_PROVIDER ?? 'off', url: env.VITE_ATTENTION_WS_URL ?? 'ws://localhost:8765' },
+  content: { mode: env.VITE_CONTENT_PROVIDER ?? 'local', url: env.VITE_CONTENT_URL ?? 'http://localhost:8010' },
+  media: { mode: env.VITE_MEDIA_PROVIDER ?? 'off', url: env.VITE_MEDIA_URL ?? 'http://localhost:8011' },
+  adaptive: { mode: env.VITE_ADAPTIVE_PROVIDER ?? 'local', url: env.VITE_ADAPTIVE_URL ?? 'http://localhost:8012' },
 };
-const KEY = 'lockin.integrations';
+// Versioned keys prevent old simulator settings leaking into a real session.
+const KEY = (import.meta.env.MODE === 'demo') ? 'lockin.integrations.demo' : 'lockin.integrations.v2';
+function sanitize(config: IntegrationConfig): IntegrationConfig {
+  const clean = { ...config };
+  for (const team of Object.keys(clean) as ServiceTeam[]) {
+    if (!(import.meta.env.MODE === 'demo') && clean[team].mode === 'mock') {
+      clean[team] = { ...clean[team], mode: team === 'attention' || team === 'media' ? 'off' : 'local' };
+    }
+  }
+  return clean;
+}
 
 // ───────── in-browser attention plugins (for the gaze team) ─────────
 const attentionPlugins = new Map<string, { label: string; create: () => AttentionProvider }>();
@@ -49,7 +64,7 @@ const attentionPlugins = new Map<string, { label: string; create: () => Attentio
  */
 export function registerAttentionPlugin(id: string, label: string, create: () => AttentionProvider) {
   attentionPlugins.set(id, { label, create });
-  TEAM_INFO.attention.modes = ['mock', 'ws', ...attentionPlugins.keys()];
+  TEAM_INFO.attention.modes = ['off', 'ws', ...attentionPlugins.keys(), ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])];
 }
 export function attentionPluginLabel(id: string) {
   return attentionPlugins.get(id)?.label;
@@ -71,21 +86,30 @@ function withTrace<T extends object>(team: Team, p: T): T {
 }
 
 class Registry {
-  config: IntegrationConfig = { ...DEFAULTS, ...load<Partial<IntegrationConfig>>(KEY, {}) };
+  config: IntegrationConfig = sanitize({ ...DEFAULTS, ...(import.meta.env.DEV ? load<Partial<IntegrationConfig>>(KEY, {}) : {}), ...savedAIConnection() });
   private cache: Partial<Record<ServiceTeam, unknown>> = {};
   private subs = new Set<() => void>();
 
   set(team: ServiceTeam, patch: Partial<ServiceConfig>) {
-    this.config = { ...this.config, [team]: { ...this.config[team], ...patch } };
+    this.config = sanitize({ ...this.config, [team]: { ...this.config[team], ...patch } });
     delete this.cache[team];
     save(KEY, this.config);
     this.subs.forEach((f) => f());
   }
   reset() {
-    this.config = { ...DEFAULTS };
+    clearAIConnection();
+    this.config = sanitize({ ...DEFAULTS });
     this.cache = {};
     save(KEY, {});
     this.subs.forEach((f) => f());
+  }
+  setAI(connection: AIConnection): boolean {
+    this.config = sanitize({ ...this.config, ...connection });
+    delete this.cache.content;
+    delete this.cache.media;
+    const persisted = saveAIConnection(connection);
+    this.subs.forEach((f) => f());
+    return persisted;
   }
   subscribe(f: () => void) {
     this.subs.add(f);
@@ -95,6 +119,10 @@ class Registry {
   }
   isMock(team: ServiceTeam) {
     return this.config[team].mode === 'mock';
+  }
+  canRecap() {
+    return ['http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])].includes(this.config.content.mode)
+      && ['http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])].includes(this.config.media.mode);
   }
 
   clearMemoryHistory() {
@@ -107,21 +135,27 @@ class Registry {
       if (c.mode === 'ws') return new WsAttentionProvider(c.url);
       const plugin = attentionPlugins.get(c.mode);
       if (plugin) return plugin.create();
-      return new MockAttentionProvider();
+      return c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAttentionProvider() : new NoAttentionProvider();
     })()) as AttentionProvider;
   }
   get content(): ContentProvider {
     const c = this.config.content;
-    return (this.cache.content ??= withTrace('content', c.mode === 'http' ? new HttpContentProvider(c.url) : new MockContentProvider())) as ContentProvider;
+    return (this.cache.content ??= withTrace('content', c.mode === 'http' ? new HttpContentProvider(c.url) : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockContentProvider() : new LocalContentProvider())) as ContentProvider;
   }
   get media(): MediaProvider {
     const c = this.config.media;
-    return (this.cache.media ??= withTrace('media', c.mode === 'http' ? new HttpMediaProvider(c.url) : new MockMediaProvider())) as MediaProvider;
+    return (this.cache.media ??= withTrace('media', c.mode === 'http' ? new HttpMediaProvider(c.url) : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockMediaProvider() : new NoMediaProvider())) as MediaProvider;
   }
   get adaptive(): AdaptiveProvider {
     const c = this.config.adaptive;
-    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url) : c.mode === 'memory' ? new MemoryAdaptiveProvider() : new MockAdaptiveProvider())) as AdaptiveProvider;
+    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url)
+      : c.mode === 'memory' ? new MemoryAdaptiveProvider()
+      : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAdaptiveProvider() : new LocalAdaptiveProvider())) as AdaptiveProvider;
   }
 }
 
 export const registry = new Registry();
+
+export function useIntegrationConfig() {
+  return useSyncExternalStore((fn) => registry.subscribe(fn), () => registry.config);
+}
