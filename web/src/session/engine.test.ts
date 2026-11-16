@@ -196,12 +196,40 @@ describe('session lifecycle', () => {
 });
 
 describe('rescue', () => {
+  it('does not count waiting for manual playback as clip time', async () => {
+    await engine.enterStudy();
+    engine.requestRecap();
+    await advance(300);
+    engine.playbackBlocked();
+    await advance(10_000);
+    engine.playbackStarted();
+    await advance(2000);
+    engine.clipEnded();
+    engine.answerQuiz(0, 0);
+    engine.finishRescue();
+    await engine.endSession();
+    expect(store.useApp.getState().report?.log.rescues[0].clipSeconds).toBe(2);
+  });
+
+  it('leaving a blocked recap does not record a clip that never played', async () => {
+    await engine.enterStudy();
+    engine.requestRecap();
+    await advance(300);
+    engine.playbackBlocked();
+    engine.skipClip();
+    expect(store.useApp.getState().rescue).toBeNull();
+    await engine.endSession();
+    expect(store.useApp.getState().report?.log.rescues).toEqual([]);
+  });
+
   it('runs a manually requested recap without labelling it an attention lapse', async () => {
     await engine.enterStudy();
     engine.requestRecap();
     await advance(300);
     expect(store.useApp.getState().rescue?.context.trigger).toBe('manual');
     expect(store.useApp.getState().rescue?.phase).toBe('playing');
+    expect(registry.content.getScript).toHaveBeenCalledTimes(1);
+    expect(registry.media.renderMedia).toHaveBeenCalledTimes(1);
     expect(store.useApp.getState().live.lapsesBySlide).toEqual({});
     engine.clipEnded();
     engine.answerQuiz(0, 0);

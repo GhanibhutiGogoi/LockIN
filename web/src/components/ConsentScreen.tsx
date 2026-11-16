@@ -45,7 +45,7 @@ export function ConsentScreen() {
           </div>
           <div>
             <dt className="font-semibold">AI features</dt>
-            <dd className="mt-1 text-graphite">{recaps ? 'Recap services receive slide text to create narration and questions. A connected personalization service may receive session measurements and quiz answers. This interface does not record camera video.' : 'AI recaps are not connected. You can read slides and save a session report without them. This interface does not record camera video.'}</dd>
+            <dd className="mt-1 text-graphite">{recaps ? 'When a manual or automatic recap starts, recap services receive that slide’s text to create narration and questions. Simply opening or paging through slides does not send their text. A connected personalization service may receive session measurements and quiz answers. This interface does not record camera video.' : 'AI recaps are not connected. You can read slides and save a session report without them. This interface does not record camera video.'}</dd>
           </div>
           <div>
             <dt className="font-semibold">You stay in control</dt>

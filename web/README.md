@@ -83,7 +83,7 @@ src/
     machine.ts       pure state machine: focused → drifting → lapse → rescue → recovering (+ tests)
     engine.ts        runtime: samples, window focus, rescues, outcomes, session log
     metrics.ts       attention-span score (+ tests)
-    packs.ts         rescue-pack cache, prefetches current slide + 2 ahead
+    packs.ts         on-demand rescue-pack cache, invalidated when services change
   components/        screens: Desk (home), Study, Rescue, Report, Settings, Integrations; Setup is calibration only (Settings → Recalibrate)
   styles/            tokens (light + dark) and components
 pilot/               static pilot sign-up page (Hallmark, Werkstatt theme) + app screenshots

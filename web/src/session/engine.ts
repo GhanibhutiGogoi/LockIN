@@ -18,7 +18,7 @@ import { registry } from '../providers/registry';
 import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI } from '../store';
 import { DEFAULT_CONFIG, configForSensitivity, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
 import { focusShare, scoreSession } from './metrics';
-import { DEFAULT_VARIANT, getPack, prefetch, prefetchDeeper, setWarmVariant } from './packs';
+import { DEFAULT_VARIANT, getPack } from './packs';
 
 const TICK_MS = 100;
 const SMOOTH_WINDOW_MS = 1000;
@@ -179,7 +179,6 @@ async function startSession() {
   await startAttention();
   if (!rt) return;
   rt.timer = window.setInterval(tick, TICK_MS);
-  prefetch(currentDeck(), useApp.getState().slideIndex, profileMemo);
 }
 
 async function startAttention() {
@@ -435,7 +434,6 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   let variant = choice.variant;
   if (!s.settings.roastsEnabled && variant.humourStyle === 'roasts') variant = { ...variant, humourStyle: 'memes' };
   rt.recentVariants.push(variant.id);
-  setWarmVariant(variant);
 
   if (choice.action === 'skip') {
     // Control arm: a plain reminder instead of a clip.
@@ -454,8 +452,6 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
     if (rt !== owner || useApp.getState().rescue?.id !== id) return; // user already left
     act({ type: 'rescueStarted' });
     useApp.setState({ rescue: { ...useApp.getState().rescue!, phase: 'playing', pack, choice: { ...choice, variant }, startedAt: Date.now() } });
-    // if this one doesn't land, the shorter second clip should be ready
-    if (depth === 1) prefetchDeeper(deck, s.slideIndex, variant, rt.profileMemo);
   } catch (err) {
     if (rt !== owner || useApp.getState().rescue?.id !== id) return;
     act({ type: 'rescueStarted' });
@@ -474,6 +470,18 @@ export function requestRecap() {
 export function playbackFailed(message: string) {
   const rescue = useApp.getState().rescue;
   if (rescue) useApp.setState({ rescue: { ...rescue, phase: 'error', error: message } });
+}
+
+export function playbackBlocked() {
+  const rescue = useApp.getState().rescue;
+  if (rescue?.phase === 'playing') useApp.setState({ rescue: { ...rescue, awaitingPlayback: true, startedAt: undefined } });
+}
+
+export function playbackStarted() {
+  const rescue = useApp.getState().rescue;
+  if (rescue?.phase === 'playing' && rescue.awaitingPlayback) {
+    useApp.setState({ rescue: { ...rescue, awaitingPlayback: false, startedAt: Date.now() } });
+  }
 }
 
 /** Narration finished. */
@@ -496,7 +504,7 @@ export function clipEnded() {
 export function skipClip() {
   const r = useApp.getState().rescue;
   if (!r || r.phase === 'quiz') return;
-  if (r.phase === 'playing' && hasQuiz(r)) {
+  if (r.phase === 'playing' && !r.awaitingPlayback && hasQuiz(r)) {
     useApp.setState({ rescue: { ...r, skipped: true, clipEndedAt: Date.now(), phase: 'quiz' } });
     return;
   }
@@ -522,7 +530,7 @@ export function answerQuiz(questionIndex: number, chosen: number) {
 export function finishRescue() {
   const r = useApp.getState().rescue;
   if (!r || !rt) return;
-  if (!r.pack || r.phase === 'error') {
+  if (!r.pack || r.phase === 'error' || r.awaitingPlayback) {
     useApp.setState({ rescue: null });
     act({ type: 'rescueFinished', clipMs: 0 });
     return;
@@ -647,7 +655,6 @@ export function dismissBreak() {
 export function onSlideChange(index: number) {
   if (!rt) return;
   rt.visitedSlides.add(index);
-  prefetch(currentDeck(), index, rt.profileMemo);
 }
 
 /** The flag is a toggle: a second press on the same clip takes the report back. */

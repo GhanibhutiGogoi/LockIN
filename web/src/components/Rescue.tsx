@@ -3,7 +3,7 @@ import type { CaptionWord, Deck, GameplayLoop, RescuePack } from '../contracts/t
 import { narrate, type Narration } from '../lib/narrator';
 import { DEMO_MODE } from '../lib/features';
 import { registry } from '../providers/registry';
-import { answerQuiz, clipEnded, finishRescue, playbackFailed, skipClip, toggleWrongFact } from '../session/engine';
+import { answerQuiz, clipEnded, finishRescue, playbackBlocked, playbackFailed, playbackStarted, skipClip, toggleWrongFact } from '../session/engine';
 import { useApp, useDeck, type RescueUI } from '../store';
 import { Gameplay } from './Gameplay';
 import { Icon } from './Icon';
@@ -160,13 +160,19 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   const [wordIdx, setWordIdx] = useState(-1);
   const [progress, setProgress] = useState(0);
   const [term, setTerm] = useState<string | null>(null);
+  const [awaitingPlay, setAwaitingPlay] = useState(false);
   const narration = useRef<Narration | null>(null);
   const termTimer = useRef<number | null>(null);
 
   // start narration once; quiz phase keeps the visuals but stops the clock
   useEffect(() => {
     if (quiz) return;
-    const n = narrate(pack.media, text, pack.variant, muted);
+    let cancelled = false;
+    setAwaitingPlay(false);
+    const n = narrate(pack.media, text, pack.variant, muted, {
+      onBlocked: () => { if (!cancelled) { setAwaitingPlay(true); playbackBlocked(); } },
+      onPlaying: () => { if (!cancelled) { setAwaitingPlay(false); playbackStarted(); } },
+    });
     narration.current = n;
     let raf = 0;
     const loopFn = () => {
@@ -181,7 +187,6 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
       raf = requestAnimationFrame(loopFn);
     };
     raf = requestAnimationFrame(loopFn);
-    let cancelled = false;
     n.done.then(() => {
       if (!cancelled) {
         const error = n.error?.();
@@ -275,6 +280,13 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
       )}
 
       <Header progress={quiz ? 1 : progress} />
+
+      {!quiz && awaitingPlay && <div className="absolute inset-0 z-10 grid place-items-center bg-black/75 px-6 pb-20">
+        <div className="max-w-[30ch] text-center">
+          <p role="status" className="mb-4 text-[17px] text-white">Your recap is ready. Tap to start the narration.</p>
+          <button type="button" className="btn bg-white text-black hover:bg-[var(--highlight)]" onClick={() => narration.current?.play?.()}>Play narration</button>
+        </div>
+      </div>}
 
       {quiz && <Quiz pack={pack} rescue={rescue} />}
     </div>
