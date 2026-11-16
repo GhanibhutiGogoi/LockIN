@@ -66,6 +66,7 @@ export type MachineEvent =
 
 export type MachineAction =
   | { type: 'start' }
+  | { type: 'requestRescue' }
   | { type: 'rescueStarted' }
   | { type: 'rescueFinished'; clipMs: number }
   | { type: 'breakTaken' }
@@ -229,6 +230,10 @@ export function dispatch(
 ): { m: Machine; events: MachineEvent[] } {
   const events: MachineEvent[] = [];
   switch (action.type) {
+    case 'requestRescue':
+      if (m.state !== 'focused' && m.state !== 'drifting') return { m, events };
+      events.push({ type: 'lapse', trigger: 'manual', rescueInRow: 1, depth: 1 });
+      return { m: go({ ...m, lastTrigger: 'manual' }, 'lapse', now, events), events };
     case 'start':
       return { m: go({ ...createMachine(now), state: 'idle' }, 'focused', now, events), events };
     case 'rescueStarted':

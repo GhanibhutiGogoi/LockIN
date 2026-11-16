@@ -17,7 +17,13 @@ export function median(xs: number[]): number | null {
 export function focusedEpisodes(samples: FocusLogEntry[]): number[] {
   const out: number[] = [];
   let run = 0;
+  let previous: number | undefined;
   for (const s of samples) {
+    if (previous !== undefined && s.t - previous > 1.5) {
+      if (run) out.push(run);
+      run = 0;
+    }
+    previous = s.t;
     if (s.state === 'focused') run++;
     else if (s.state === 'paused' || s.state === 'break') {
       // pauses end a stretch but don't count against you
@@ -42,7 +48,7 @@ export function scoreSession(samples: FocusLogEntry[], rescues: RescueOutcome[])
     if (samples[i].state === 'lapse' && samples[i - 1].state !== 'lapse') lapses++;
   }
   // lapses can be shorter than one log tick; rescues are the reliable count
-  lapses = Math.max(lapses, rescues.length);
+  lapses = Math.max(lapses, rescues.filter((r) => r.context.trigger !== 'manual').length);
 
   const refocus = rescues.map((r) => r.timeToRefocusSec).filter((x): x is number => x !== null);
   const answers = rescues.flatMap((r) => r.quiz);
@@ -68,7 +74,7 @@ export function focusShare(samples: FocusLogEntry[], fromSec: number, toSec: num
 export function slidesThatLostYou(rescues: RescueOutcome[]): { slideIndex: number; count: number }[] {
   const counts = new Map<number, number>();
   for (const r of rescues) {
-    if (r.context.rescueInRow > 1) continue; // count lapses, not deeper clips
+    if (r.context.rescueInRow > 1 || r.context.trigger === 'manual') continue;
     counts.set(r.context.slideIndex, (counts.get(r.context.slideIndex) ?? 0) + 1);
   }
   return [...counts.entries()]

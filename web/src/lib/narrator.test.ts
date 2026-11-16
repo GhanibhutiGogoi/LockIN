@@ -72,7 +72,40 @@ describe('narrator mute', () => {
 });
 
 describe('audio narration', () => {
-  it('falls back to the browser voice when the audio file fails', async () => {
+  it('keeps blocked audio pending, allows another manual attempt, and cannot restart after stop', async () => {
+    class BlockedAudio {
+      muted = false;
+      currentTime = 0;
+      preload = '';
+      onended = null;
+      onerror = null;
+      play = vi.fn(() => Promise.reject(new DOMException('Blocked', 'NotAllowedError')));
+      pause = vi.fn();
+      constructor() { audio = this; }
+    }
+    let audio!: BlockedAudio;
+    Object.assign(globalThis, { Audio: BlockedAudio });
+    const onBlocked = vi.fn();
+    const n = narrate({ ...media(), audioUrl: '/recap.mp3' }, text, { voiceId: 'hype', pacing: 1 }, false, { onBlocked });
+    let done = false;
+    void n.done.then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onBlocked).toHaveBeenCalledTimes(1);
+    expect(n.time()).toBe(0);
+    expect(done).toBe(false);
+    expect(n.error?.()).toBeNull();
+    n.play?.();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onBlocked).toHaveBeenCalledTimes(2);
+    expect(done).toBe(false);
+    n.stop();
+    await n.done;
+    n.play?.();
+    expect(audio.play).toHaveBeenCalledTimes(2);
+    expect(spoken).toHaveLength(0);
+  });
+
+  it('reports a failed model audio file without substituting browser speech', async () => {
     let audio!: { onerror: (() => void) | null };
     class FakeAudio {
       muted = false;
@@ -89,8 +122,10 @@ describe('audio narration', () => {
       pause() {}
     }
     Object.assign(globalThis, { Audio: FakeAudio });
-    narrate({ ...media(), audioUrl: '/missing.mp3' }, text, { voiceId: 'hype', pacing: 1 }, false);
+    const narration = narrate({ ...media(), audioUrl: '/missing.mp3' }, text, { voiceId: 'hype', pacing: 1 }, false);
     audio.onerror?.();
-    expect(spoken).toHaveLength(1);
+    await narration.done;
+    expect(narration.error?.()).toContain('could not be played');
+    expect(spoken).toHaveLength(0);
   });
 });

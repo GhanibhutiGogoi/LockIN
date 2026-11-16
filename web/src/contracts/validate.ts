@@ -40,11 +40,13 @@ function need(p: Problems, cond: boolean, msg: string) {
 
 export function checkDeck(d: Partial<Deck>): Problems {
   const p: Problems = [];
-  need(p, isStr(d.id), 'deck.id must be a string');
-  need(p, isStr(d.title), 'deck.title must be a string');
-  need(p, Array.isArray(d.slides), 'deck.slides must be an array');
-  (d.slides ?? []).forEach((s, i) => {
-    need(p, isNum(s.index), `slides[${i}].index must be a number`);
+  need(p, isStr(d.id) && d.id.length > 0, 'deck.id must be a non-empty string');
+  need(p, isStr(d.title) && d.title.length > 0, 'deck.title must be a non-empty string');
+  need(p, Array.isArray(d.slides) && d.slides.length > 0, 'deck.slides must be a non-empty array');
+  need(p, isNum(d.slideCount) && d.slideCount === d.slides?.length, 'deck.slideCount must match the number of slides');
+  (Array.isArray(d.slides) ? d.slides : []).forEach((s, i) => {
+    if (!s || typeof s !== 'object') { p.push(`slides[${i}] must be an object`); return; }
+    need(p, s.index === i, `slides[${i}].index must equal ${i}`);
     need(p, isStr(s.title), `slides[${i}].title must be a string`);
     need(p, isStr(s.text), `slides[${i}].text must be a string`);
   });

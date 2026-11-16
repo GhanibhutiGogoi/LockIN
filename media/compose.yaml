@@ -1,0 +1,62 @@
+services:
+  mock:
+    profiles: [mock]
+    build: {context: ., target: api}
+    environment: {LOCKIN_MODE: mock}
+    ports: ["127.0.0.1:8011:8011"]
+    volumes: ["./data:/data"]
+
+  api:
+    profiles: [real]
+    build: {context: ., target: api}
+    environment:
+      LOCKIN_MODE: real
+      LOCKIN_FISH_URL: http://voice:8021
+      LOCKIN_ALIGNER_URL: http://aligner:8022
+      LOCKIN_REQUEST_TIMEOUT: ${LOCKIN_REQUEST_TIMEOUT:-45}
+      LOCKIN_CORS_ORIGINS: ${LOCKIN_CORS_ORIGINS:-["http://localhost:5180","http://127.0.0.1:5180"]}
+      LOCKIN_CONTENT_URL: ${LOCKIN_CONTENT_URL:-}
+      LOCKIN_CONTENT_API_KEY: ${LOCKIN_CONTENT_API_KEY:-}
+    ports: ["127.0.0.1:8011:8011"]
+    volumes: ["./data:/data"]
+    depends_on:
+      voice: {condition: service_healthy}
+      aligner: {condition: service_healthy}
+    restart: unless-stopped
+
+  voice:
+    profiles: [real]
+    build: {context: ., target: voice}
+    gpus: all
+    command: ["lockin-media", "serve-voice", "--host", "0.0.0.0", "--devices", "${LOCKIN_VOICE_DEVICES:-cuda:0,cuda:1,cuda:2,cuda:3}"]
+    volumes: ["./models:/models:ro", "hf-cache:/hf-cache"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8021/v1/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15m
+      retries: 10
+
+  aligner:
+    profiles: [real]
+    build: {context: ., target: aligner}
+    environment: {LOCKIN_ALIGNER_DEVICE: cpu}
+    volumes: ["./models:/models:ro", "hf-cache:/hf-cache"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8022/healthz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 5m
+      retries: 10
+
+  video:
+    profiles: [video]
+    build: {context: ., target: video}
+    gpus: all
+    environment:
+      LOCKIN_VIDEO_GPUS: ${LOCKIN_VIDEO_GPUS:-0}
+      LOCKIN_VIDEO_OFFLOAD: ${LOCKIN_VIDEO_OFFLOAD:-cpu}
+    volumes: ["./models:/models:ro", "./data:/data", "hf-cache:/hf-cache"]
+
+volumes:
+  hf-cache:

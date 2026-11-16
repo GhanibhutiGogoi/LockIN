@@ -6,11 +6,13 @@ import { SettingsSheet } from './components/SettingsSheet';
 import { SetupScreen } from './components/SetupScreen';
 import { StudyScreen } from './components/StudyScreen';
 import { Toast } from './components/Toast';
-import { applyTheme, useApp } from './store';
+import { actions, applyTheme, useApp } from './store';
 
 export function App() {
   const screen = useApp((s) => s.screen);
   const theme = useApp((s) => s.theme);
+  const selected = useApp((s) => s.decks.some((d) => d.id === s.deckId));
+  useEffect(() => { void actions.loadLibrary(); }, []);
   useEffect(() => {
     applyTheme(theme);
     // the browser chrome follows a forced theme too, not only the system one
@@ -25,9 +27,9 @@ export function App() {
 
   return (
     <>
-      {screen === 'desk' && <DeskScreen />}
-      {screen === 'setup' && <SetupScreen />}
-      {screen === 'study' && <StudyScreen />}
+      {(screen === 'desk' || ((screen === 'study' || screen === 'setup') && !selected)) && <DeskScreen />}
+      {screen === 'setup' && selected && <SetupScreen />}
+      {screen === 'study' && selected && <StudyScreen />}
       {screen === 'report' && <ReportScreen />}
       <SettingsSheet />
       <Toast />

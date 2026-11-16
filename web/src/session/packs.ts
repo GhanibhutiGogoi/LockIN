@@ -1,7 +1,7 @@
 /**
  * Rescue-pack cache. Composes AI-analysis output (script) with video output
- * (media) into a RescuePack, and keeps the current slide and two ahead warm so
- * a rescue starts instantly (Gate 2: < 2 s).
+ * (media) into a RescuePack only when a recap is triggered. Opening a deck or
+ * paging through it must not send slide text to AI services.
  *
  * Two levels, because the knobs land in different places:
  *  - the script depends on length, slang, humour, recap/preview and quiz count;
@@ -15,51 +15,55 @@ import { registry } from '../providers/registry';
 
 export { DEFAULT_VARIANT };
 
-const scripts = new Map<string, Promise<RescueScript>>();
-const medias = new Map<string, Promise<RescueMedia>>();
+function newCache() {
+  return {
+    controller: new AbortController(),
+    scripts: new Map<string, Promise<RescueScript>>(),
+    medias: new Map<string, Promise<RescueMedia>>(),
+  };
+}
+let cache = newCache();
 
 export const scriptKey = (deckId: string, slide: number, v: Variant, depth: number) =>
   [deckId, slide, depth, v.targetSeconds, v.slangLevel, v.humourStyle, v.recapOrPreview, v.quizCount].join(':');
 export const mediaKey = (deckId: string, slide: number, v: Variant, depth: number) => [scriptKey(deckId, slide, v, depth), v.voiceId, v.pacing].join(':');
-
-/** The variant we prefetch with: the last one the personal model chose. */
-let warmVariant: Variant = DEFAULT_VARIANT;
-export function setWarmVariant(v: Variant) {
-  warmVariant = v;
-}
 
 function cached<T>(map: Map<string, Promise<T>>, k: string, make: () => Promise<T>): Promise<T> {
   let p = map.get(k);
   if (!p) {
     p = make();
     map.set(k, p);
-    p.catch(() => map.delete(k));
+    p.catch(() => { if (map.get(k) === p) map.delete(k); });
   }
   return p;
 }
 
 export async function getPack(deck: Deck, slideIndex: number, variant: Variant, depth: 1 | 2, profileMemo?: string): Promise<RescuePack> {
   const slide = deck.slides[slideIndex];
+  if (!slide?.text.trim()) throw new Error('This slide has no readable text. Use a PDF with selectable text for AI recaps.');
+  // Bind both providers and cache maps before awaiting anything. An old
+  // response can never select a replacement provider or populate its cache.
+  const owner = cache;
+  const content = registry.content;
+  const mediaProvider = registry.media;
+  const { signal } = owner.controller;
+  const assertCurrent = () => {
+    if (owner !== cache || signal.aborted) throw new Error('The AI connection changed. Request this recap again.');
+  };
   const sk = scriptKey(deck.id, slideIndex, variant, depth);
-  const script = await cached(scripts, sk, () => registry.content.getScript({ deck, slide, variant, profileMemo, depth }));
-  const media = await cached(medias, mediaKey(deck.id, slideIndex, variant, depth), () => registry.media.renderMedia({ deckId: deck.id, slideIndex, script, variant }));
+  const script = await cached(owner.scripts, sk, () => content.getScript({ deck, slide, variant, profileMemo, depth }, { signal }));
+  assertCurrent();
+  const media = await cached(owner.medias, mediaKey(deck.id, slideIndex, variant, depth), () => mediaProvider.renderMedia({ deckId: deck.id, slideIndex, script, variant }, { signal }));
+  assertCurrent();
   // every knob that shaped this pack is in its keys, so labelling it with `variant` is accurate
   return { deckId: deck.id, slideIndex, variant, script, media };
 }
 
-export function prefetch(deck: Deck, slideIndex: number, profileMemo?: string) {
-  registry.content.prewarm?.(deck.id, slideIndex);
-  for (let i = slideIndex; i < Math.min(deck.slideCount, slideIndex + 3); i++) {
-    getPack(deck, i, warmVariant, 1, profileMemo).catch(() => {});
-  }
-}
-
-/** Warm the shorter second clip for this slide while the first one plays (a media cache miss can take 8–25 s). */
-export function prefetchDeeper(deck: Deck, slideIndex: number, variant: Variant, profileMemo?: string) {
-  getPack(deck, slideIndex, variant, 2, profileMemo).catch(() => {});
-}
-
 export function clearPacks() {
-  scripts.clear();
-  medias.clear();
+  const previous = cache;
+  cache = newCache();
+  previous.controller.abort();
 }
+
+// Service changes cannot reuse an earlier provider's script or audio.
+registry.subscribe(clearPacks);

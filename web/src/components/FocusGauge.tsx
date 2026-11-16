@@ -31,6 +31,8 @@ function stateColor(state: FocusState): string {
 export function FocusGauge({ compact = false }: { compact?: boolean }) {
   const state = useApp((s) => s.live.state);
   const effective = useApp((s) => s.live.effective);
+  const measured = useApp((s) => s.live.attentionAvailable);
+  if (!measured) return <span className="text-[14px] text-graphite" role="status">{state === 'paused' ? 'Paused' : 'Studying'}</span>;
   const filled = state === 'paused' || state === 'break' ? 0 : Math.max(1, Math.ceil(effective / 20));
   const color = stateColor(state);
   return (
