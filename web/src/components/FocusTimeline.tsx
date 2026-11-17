@@ -7,7 +7,7 @@ import type { Deck, FocusLogEntry, RescueOutcome } from '../contracts/types';
  * threshold labels: the shape carries it, and the crosshair names any moment.
  * A minute-by-minute table is there for screen readers.
  */
-export function FocusTimeline({ samples, rescues, deck, sessionStart }: { samples: FocusLogEntry[]; rescues: RescueOutcome[]; deck: Deck; sessionStart: number }) {
+export function FocusTimeline({ samples, rescues, deck, sessionStart, sessionSeconds }: { samples: FocusLogEntry[]; rescues: RescueOutcome[]; deck: Deck; sessionStart: number; sessionSeconds?: number }) {
   // drawn at the size it is shown, so tick labels stay at their real 13px on a phone too
   const wrap = useRef<HTMLDivElement>(null);
   const [W, setW] = useState(1200);
@@ -31,20 +31,10 @@ export function FocusTimeline({ samples, rescues, deck, sessionStart }: { sample
   const box = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<number | null>(null);
 
-  // downsample to ≤ 400 points with a per-bucket mean so long sessions stay light
-  const pts = useMemo(() => {
-    if (samples.length <= 400) return samples;
-    const step = samples.length / 400;
-    const out: FocusLogEntry[] = [];
-    for (let i = 0; i < 400; i++) {
-      const slice = samples.slice(Math.floor(i * step), Math.floor((i + 1) * step));
-      out.push({ ...slice[slice.length >> 1], score: slice.reduce((a, b) => a + b.score, 0) / slice.length });
-    }
-    return out;
-  }, [samples]);
+  const segments = useMemo(() => timelineSegments(samples), [samples]);
 
   // the axis ends where the session ended, so a short session isn't padded with empty time
-  const tMax = Math.max(10, samples.at(-1)?.t ?? 10);
+  const tMax = Math.max(10, sessionSeconds ?? 0, samples.at(-1)?.t ?? 10);
   const x = (t: number) => M.l + (t / tMax) * pw;
   const y = (v: number) => M.t + (1 - v / 100) * ph;
 
@@ -63,8 +53,10 @@ export function FocusTimeline({ samples, rescues, deck, sessionStart }: { sample
     return out;
   }, [samples]);
 
-  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.state === 'paused' || p.state === 'break' ? 0 : p.score).toFixed(1)}`).join(' ');
-  const area = pts.length ? `${line} L${x(pts.at(-1)!.t)},${y(0)} L${x(pts[0].t)},${y(0)} Z` : '';
+  const paths = segments.map(pts => {
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.state === 'paused' || p.state === 'break' ? 0 : p.score).toFixed(1)}`).join(' ');
+    return { line, area: `${line} L${x(pts.at(-1)!.t)},${y(0)} L${x(pts[0].t)},${y(0)} Z`, points: pts };
+  });
 
   // the smallest round step that keeps the axis to a handful of labels
   const maxTicks = narrow ? 5 : 9;
@@ -90,7 +82,7 @@ export function FocusTimeline({ samples, rescues, deck, sessionStart }: { sample
     if (!samples.length) return;
     let i = samples.findIndex((s) => s.t >= t);
     if (i < 0) i = samples.length - 1;
-    setHover(i);
+    setHover(Math.abs(samples[i].t - t) <= 1 ? i : null);
   }
 
   const fmt = (t: number) => `${Math.floor(t / 60)}:${Math.floor(t % 60).toString().padStart(2, '0')}`;
@@ -114,8 +106,11 @@ export function FocusTimeline({ samples, rescues, deck, sessionStart }: { sample
             <rect key={i} x={x(b.from)} y={M.t} width={Math.max(2, x(b.to) - x(b.from))} height={ph} fill={b.kind === 'rescue' ? 'var(--lapse)' : 'var(--pencil)'} opacity={b.kind === 'rescue' ? 0.14 : 0.1} />
           ))}
           {/* series */}
-          <path d={area} fill="var(--pen)" opacity={0.06} />
-          <path d={line} fill="none" stroke="var(--pen)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          {paths.map(({ line, area, points }, i) => <g key={i}>
+            <path d={area} fill="var(--pen)" opacity={0.06} />
+            <path d={line} fill="none" stroke="var(--pen)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+            {points.length === 1 && <circle cx={x(points[0].t)} cy={y(points[0].state === 'paused' || points[0].state === 'break' ? 0 : points[0].score)} r={2} fill="var(--pen)" />}
+          </g>)}
           {/* lapse markers */}
           {lapseTimes.map((l, i) => (
             <g key={i}>
@@ -158,6 +153,27 @@ export function FocusTimeline({ samples, rescues, deck, sessionStart }: { sample
       </div>
     </figure>
   );
+}
+
+export function timelineSegments(samples: FocusLogEntry[]): FocusLogEntry[][] {
+  const segments: FocusLogEntry[][] = [];
+  for (const sample of samples) {
+    const last = segments.at(-1);
+    if (!last || sample.t - last.at(-1)!.t > 1.5) segments.push([sample]);
+    else last.push(sample);
+  }
+  // Downsample within measured spans so missing observations never become connecting lines.
+  const stride = Math.max(1, Math.ceil(samples.length / 400));
+  return segments.map(segment => {
+    if (stride === 1 || segment.length <= 2) return segment;
+    const out = [segment[0]];
+    for (let i = 1; i < segment.length - 1; i += stride) {
+      const bucket = segment.slice(i, Math.min(i + stride, segment.length - 1));
+      out.push({ ...bucket[bucket.length >> 1], score: bucket.reduce((sum, s) => sum + s.score, 0) / bucket.length });
+    }
+    out.push(segment.at(-1)!);
+    return out;
+  });
 }
 
 function MinuteTable({ samples, deck }: { samples: FocusLogEntry[]; deck: Deck }) {

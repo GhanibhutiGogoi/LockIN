@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
 import type { Deck, MemoryDecision, MemoryStyle, RescueOutcome } from '../contracts/types';
 import { memoryStyle } from '../providers/memory/adaptive';
-import { formatDuration, slidesThatLostYou } from '../session/metrics';
+import { focusedEpisodes, formatDuration, slidesThatLostYou } from '../session/metrics';
 import { actions, useApp, type Report } from '../store';
 import { FocusTimeline } from './FocusTimeline';
 import { Icon } from './Icon';
@@ -22,6 +22,8 @@ export function ReportScreen() {
   const sc = review.score;
   const lost = slidesThatLostYou(log.rescues).slice(0, 4);
   const durationSec = log.activeSeconds ?? (log.endedAt - log.startedAt) / 1000;
+  const longestStretch = focusedEpisodes(log.samples).reduce((longest, seconds) => Math.max(longest, seconds), 0);
+  const measuredSeconds = log.samples.filter(s => !['paused', 'break', 'idle'].includes(s.state)).length;
   const lapses = log.rescues.filter((r) => r.context.rescueInRow === 1 && r.context.trigger !== 'manual').length;
   const answered = questions.filter((q) => q.chosen !== null);
   const correct = answered.filter((q) => q.chosen === q.answerIndex).length;
@@ -71,11 +73,12 @@ export function ReportScreen() {
                 <p className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-1">
                   <span className="figure text-[clamp(64px,7.5vw,112px)] leading-[0.95]">{formatDuration(sc.sustainedEpisodeMedianSec)}</span>
                   <span className="text-[20px] text-graphite">
-                    focus at a stretch
+                    median measured focus stretch
                     <Delta delta={sc.deltaVsBaseline ?? null} />
                   </span>
                 </p>
               )}
+              <p className="mt-3 text-[14px] text-graphite">Longest measured focus stretch: {formatDuration(longestStretch)}</p>
             </div>
             <Memo memo={review.profileMemo} tips={review.tips} quick={durationSec < 120} className="hidden lg:block" />
           </section>
@@ -92,8 +95,11 @@ export function ReportScreen() {
                 </>
               )}
             </p>
+            <p className="mt-2 text-[13px] text-graphite">
+              Measured {formatDuration(measuredSeconds)} of {formatDuration(durationSec)} active time. Chart gaps indicate missing measurements.
+            </p>
             <div className="mt-4 h-[clamp(180px,38svh,420px)]">
-              <FocusTimeline samples={log.samples} rescues={log.rescues} deck={deck} sessionStart={log.startedAt} />
+              <FocusTimeline samples={log.samples} rescues={log.rescues} deck={deck} sessionStart={log.startedAt} sessionSeconds={(log.endedAt - log.startedAt) / 1000} />
             </div>
           </section>
         </div>

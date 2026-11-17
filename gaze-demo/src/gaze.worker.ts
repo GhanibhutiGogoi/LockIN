@@ -3,18 +3,23 @@ import * as tf from '@tensorflow/tfjs';
 import WebEyeTrack from '../vendor/webeyetrack/WebEyeTrack';
 import type { GazeResult } from '../vendor/webeyetrack/types';
 import { EyeTheiaTracker } from './core/eyetheia';
-import { featuresFrom, quantile, fitEnvelope, outsideEvidence, type Envelope } from './rules';
+import { featuresFrom, fitEnvelope, attentionEvidence, ScreenEvidence, type Envelope } from './rules';
+import { ATTENTION_TIMING, ATTENTION_RULE_VERSION } from '../backend/static/attention-policy.js';
+import { finitePair, summarizeCalibrationPoint, calibrationFitDiagnostics, type CalibrationSample, type CalibrationFitDiagnostics } from './core/calibration';
 
 type WorkerGazeResult = GazeResult | Awaited<ReturnType<EyeTheiaTracker['step']>>;
 let tracker: WebEyeTrack | EyeTheiaTracker;
 let busy = false;
 let expressionEnabled=false;
 let point: { index: number; x: number; y: number; start: number; startedAt?: number; calibrationId?: number; captureRound?: number; validation: boolean; samples: WorkerGazeResult[]; features: number[][] } | null = null;
-let supports: { result: WorkerGazeResult; x: number; y: number }[] = [];
+let supports: { rawMedian: number[]; x: number; y: number }[] = [];
+let fitDiagnostics: CalibrationFitDiagnostics | null = null;
 let baseline: number[][] = [];
 let lastSample = 0;
 let screenEnvelope: Envelope | null = null;
+const screenEvidence = new ScreenEvidence();
 let calibrationId: number | undefined;
+let model = 'blazegaze';
 
 function send(type: string, payload: object = {}) { self.postMessage({ type, ...payload }); }
 // Reset/adaptation/filter changes must not interleave with asynchronous inference.
@@ -25,8 +30,8 @@ async function handle(data: any) {
   try {
     if (data.type === 'init') {
       expressionEnabled=data.expression===true;
-      send('loading', { message: '正在加载本地预训练模型…' });
-      const model = data.model === 'eyetheia' ? 'eyetheia' : 'blazegaze';
+      send('loading', { message: 'Loading local pretrained models…' });
+      model = data.model === 'eyetheia' ? 'eyetheia' : 'blazegaze';
       if (model === 'eyetheia') {
         tracker = new EyeTheiaTracker();
       } else {
@@ -35,44 +40,39 @@ async function handle(data: any) {
         tracker = new WebEyeTrack(12);
       }
       await tracker.initialize(data.baseUrl);
-      send('ready', { model, backend: model === 'eyetheia' ? 'onnxruntime-web/wasm' : tf.getBackend(), protocolVersion: 3, captureRounds: true });
+      send('ready', { model, backend: model === 'eyetheia' ? 'onnxruntime-web/wasm' : tf.getBackend(), protocolVersion: 5, captureRounds: true });
     } else if (data.type === 'reset') {
       supports = []; baseline = []; point = null;
+      fitDiagnostics = null;
       screenEnvelope = null;calibrationId = data.calibrationId;
+      screenEvidence.reset();
       tracker.resetCalibration();
       send('resetDone');
     } else if (data.type === 'point') {
+      screenEvidence.reset();
       tracker.resetFilter();
       point = { ...data.point, start: performance.now(), samples: [], features: [] };
       lastSample = 0;
     } else if (data.type === 'cancelPoint') {
       point = null;
     } else if (data.type === 'resetFilter') {
+      screenEvidence.reset();
       tracker.resetFilter();
       send('filterReset');
     } else if (data.type === 'fit') {
       busy = true;
-      if (supports.length < 9) throw new Error('校准点不足，请重新开始校准');
+      if (supports.length < 9) throw new Error('Not enough calibration points. Please restart calibration.');
       const envelope = fitEnvelope(baseline);
-      // Use the upstream affine adaptation with frozen pretrained weights.
-      // No uncontrolled click-based retraining, no gradient updates in this demo.
-      if ('fit' in tracker) {
-        const predictions = supports.flatMap(({ result }) => 'rawGaze' in result && result.rawGaze ? [result.rawGaze] : []);
-        if (predictions.length !== supports.length) throw new Error('缺少有效的 EyeTheia 校准坐标，请重新校准');
-        tracker.fit(predictions, supports.map(s => [s.x, s.y]));
-      } else {
-        const results = supports.map(s => s.result as GazeResult);
-        await tracker.adapt(
-          results.map(r => r.eyePatch),
-          results.map(r => r.headVector),
-          results.map(r => r.faceOrigin3D),
-          supports.map(s => [s.x, s.y]),
-          0,
-        );
-      }
+      // Fit one robust raw prediction per target; pretrained weights stay frozen.
+      const predictions = supports.map(s => s.rawMedian);
+      const targets = supports.map(s => [s.x, s.y]);
+      fitDiagnostics = calibrationFitDiagnostics(predictions, targets);
+      const matrix = await tracker.fit(predictions, targets);
+      fitDiagnostics = calibrationFitDiagnostics(predictions, targets, matrix);
       supports = [];
       screenEnvelope = envelope;
-      send('fitted', { baseline, calibrationId: data.calibrationId });
+      screenEvidence.reset();
+      send('fitted', { baseline, fitDiagnostics, calibrationId: data.calibrationId });
       baseline = [];
       busy = false;
     } else if (data.type === 'frame') {
@@ -87,21 +87,34 @@ async function handle(data: any) {
       const frame = new ImageData(new Uint8ClampedArray(data.buffer), data.width, data.height);
       const r = await tracker.step(frame, data.timestamp);
       const f = featuresFrom({ landmarks: r.facialLandmarks, head: r.headVector, eyesOpen: r.gazeState === 'open' });
+      const decision = attentionEvidence({ face: r.facialLandmarks.length > 0, head: r.headVector, eyesOpen: r.gazeState === 'open', eyeAspect: r.eyeAspect, features: f, mappedGaze: r.mappedGaze }, screenEnvelope);
+      const outside = screenEvidence.update(data.timestamp, decision.outside, decision.confirmMs);
       const elapsed = performance.now() - start;
       send('result', {
         capturedAt: data.timestamp,
         captureRound: data.captureRound,
         gaze: r.gazeState === 'open' && r.facialLandmarks.length && r.normPog.every(Number.isFinite) ? r.normPog : null,
         features: f,
+        mappedGaze: r.mappedGaze,
         face: r.facialLandmarks.length > 0,
         eyesOpen: r.gazeState === 'open',
+        attentionValid: outside !== null,
+        attentionReason: decision.reason,
+        diagnostic: {
+          model, ruleVersion: ATTENTION_RULE_VERSION, timing: ATTENTION_TIMING,
+          capturedAt: data.timestamp, reason: decision.reason, rawOutside: decision.outside, confirmedOutside: outside,
+          face: r.facialLandmarks.length > 0, eyesOpen: r.gazeState === 'open',
+          eyeAspect: r.eyeAspect?.every(Number.isFinite) ? r.eyeAspect : null,
+          head: r.headVector.every(Number.isFinite) ? r.headVector : null,
+          features: f, mappedGaze: finitePair(r.mappedGaze) ? r.mappedGaze : null,
+        },
         expressionInput: expressionEnabled ? faceTensor(frame.data,data.width,data.height,r.facialLandmarks) : null,
         blendshapes: r.faceBlendshapes?.[0]?.categories.map(c => [c.categoryName, c.score]) ?? [],
         ms: elapsed,
-        outside: f && screenEnvelope ? outsideEvidence(f, screenEnvelope, 1) : null,
+        outside,
         calibrationId,
       });
-      if (point && point === collecting && point.captureRound === data.captureRound && settled && f && r.normPog.length === 2 && r.normPog.every(Number.isFinite) && performance.now() - lastSample > 100) {
+      if (point && point === collecting && point.captureRound === data.captureRound && settled && f && finitePair(r.normPog) && finitePair(r.rawGaze) && finitePair(r.mappedGaze) && finitePair(r.unclippedGaze) && performance.now() - lastSample > 100) {
         lastSample = performance.now();
         point.samples.push(r);
         point.features.push(f);
@@ -109,8 +122,9 @@ async function handle(data: any) {
         if (point.samples.length >= 7) {
           const p = point;
           point = null;
+          const summary = summarizeCalibrationPoint(p.samples as CalibrationSample[]);
           if (!p.validation) {
-            supports.push({ result: p.samples[Math.floor(p.samples.length / 2)], x: p.x, y: p.y });
+            supports.push({ rawMedian: summary.rawMedian, x: p.x, y: p.y });
             baseline.push(...p.features);
           }
           send('pointDone', {
@@ -119,7 +133,8 @@ async function handle(data: any) {
             calibrationId: p.calibrationId,
             validation: p.validation,
             target: [p.x, p.y],
-            predicted: [0, 1].map(i => quantile(p.samples.map(s => s.normPog[i]), 0.5)),
+            predicted: summary.predicted,
+            diagnostics: { ...summary, durationMs: Math.max(0, data.timestamp - (p.startedAt ?? p.start)) },
           });
         }
       }
@@ -127,6 +142,6 @@ async function handle(data: any) {
     }
   } catch (e) {
     busy = false;
-    send('error', { message: e instanceof Error ? e.message : String(e), operation: data.type, captureRound: data.captureRound ?? data.point?.captureRound, calibrationId: data.calibrationId ?? data.point?.calibrationId });
+    send('error', { message: e instanceof Error ? e.message : String(e), operation: data.type, fitDiagnostics: data.type === 'fit' ? fitDiagnostics : undefined, captureRound: data.captureRound ?? data.point?.captureRound, calibrationId: data.calibrationId ?? data.point?.calibrationId });
   }
 }

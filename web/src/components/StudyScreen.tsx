@@ -6,6 +6,7 @@ import { dismissBreak, endBreak, endSession, enterStudy, isRunning, onSlideChang
 import { actions, useApp, useDeck } from '../store';
 import { CONSENT_VERSION, ConsentScreen } from './ConsentScreen';
 import { FocusGauge } from './FocusGauge';
+import { DriftGlow } from './DriftGlow';
 import { Icon } from './Icon';
 import { IntegrationsButton } from './IntegrationsPanel';
 import { Rescue } from './Rescue';
@@ -168,7 +169,7 @@ export function StudyScreen() {
         </>
       )}
 
-      <div className="drift-glow" data-on={state === 'drifting' || state === 'recovering'} aria-hidden />
+      <DriftGlow />
       {state === 'paused' && !breakCard && <PausedVeil />}
       {breakCard && !rescue && <BreakCard reason={breakCard.reason} until={breakCard.until} />}
       <Rescue />
@@ -280,17 +281,18 @@ function GazeStatus() {
   if (!registry.attention.usesOffscreenRule) return null;
 
   const away = gaze && (gaze.state === 'candidate' || gaze.state === 'away');
-  const showTime = gaze && (away || (gaze.state === 'unknown' && gaze.awayMs > 0));
+  const showTime = gaze && (away || (['unknown', 'recovering'].includes(gaze.state) && gaze.awayMs > 0));
   const label = paused ? 'Camera paused'
     : camera !== 'on' ? (screenStudy ? 'Gaze tracking off' : 'App switches only')
     : !gaze || gaze.state === 'unknown' ? (gaze?.awayMs ? 'Tracking interrupted · timer paused' : 'Tracking interrupted')
-    : away ? 'Looking away'
+    : gaze.state === 'recovering' ? 'Checking return · timer paused'
+    : away ? gaze.reason === 'eyes_closed' ? 'Eyes closed' : 'Looking away'
     : 'Gaze tracking active';
   return (
     <div className="pointer-events-none absolute top-16 right-3 z-20 flex gap-2 rounded-lg bg-sheet px-2.5 py-1.5 text-[12px] text-graphite shadow-sm sm:right-5">
       <span role="status">{label}</span>
       {showTime && !paused && camera === 'on' && (
-        <span className="num" aria-label="Valid off-screen time">
+        <span className="num" aria-label="Valid non-focus time">
           {Math.floor(Math.min(gaze.awayMs, gaze.thresholdMs) / 1000)} / {gaze.thresholdMs / 1000} s
         </span>
       )}

@@ -45,20 +45,26 @@ document.querySelector('#run').onclick = async () => {
         phase = 'calibration'; beginPoint();
       } else if (phase === 'calibration') {
         nextFrame = setTimeout(sendFrame,100);
+      } else if (phase === 'fitted-check') {
+        if (!data.face || !data.gaze?.every(Number.isFinite)) { fail('fitted inference invalid'); return; }
+        print('PASS: fitted model produces finite screen coordinates');
+        worker.postMessage({type:'reset'});
       } else if (phase === 'reset-check') {
         if (!data.face || !data.gaze?.every(Number.isFinite)) { fail('post-reset inference invalid'); return; }
         print('PASS: calibration reset preserves working pretrained model');
         print('ALL MODEL SMOKE CHECKS PASSED'); clearTimeout(timer); worker.terminate();
       }
     } else if (data.type === 'pointDone') {
+      if (data.diagnostics?.rawSamples.length !== 7) { fail('missing seven-frame diagnostics'); return; }
       print('Captured calibration point '+(data.index+1));
       pointIndex++;
       if (pointIndex < points.length) beginPoint();
       else { clearTimeout(nextFrame); phase = 'fitting'; worker.postMessage({type:'fit'}); }
     } else if (data.type === 'fitted') {
       if (data.baseline.length < 63) { fail('missing baseline samples'); return; }
+      if (data.fitDiagnostics?.method !== 'median-7-affine-v1' || !Number.isFinite(data.fitDiagnostics.rmse)) { fail('missing robust fit diagnostics'); return; }
       print('PASS: 9-point affine calibration completed, '+data.baseline.length+' baseline samples');
-      worker.postMessage({type:'reset'});
+      phase = 'fitted-check'; sendFrame();
     } else if (data.type === 'resetDone') {
       phase = 'reset-check'; sendFrame();
     } else if (data.type === 'error') fail(data.message);

@@ -5,10 +5,10 @@ import type { TrackerCalibrationDiagnostics } from '../../../gaze-demo/backend/s
  * Each team implements ONE interface below. The UI only ever talks to these
  * interfaces, so a team can swap mock → real without touching UI code.
  *
- *   視線追蹤 (gaze tracking)        → AttentionProvider   (runs in the browser, or streams via WebSocket)
- *   AI 分析  (slide → script/quiz)   → ContentProvider     (HTTP)
- *   做影片   (voice/captions/b-roll) → MediaProvider       (HTTP)
- *   個人化 AI (bandit / profile)      → AdaptiveProvider    (HTTP)
+ *   Gaze tracking (gaze tracking)        → AttentionProvider   (runs in the browser, or streams via WebSocket)
+ *   Content analysis  (slide → script/quiz)   → ContentProvider     (HTTP)
+ *   Media generation   (voice/captions/b-roll) → MediaProvider       (HTTP)
+ *   Adaptive AI (bandit / profile)      → AdaptiveProvider    (HTTP)
  *
  * See docs/INTEGRATION.md for wire formats and how to plug in.
  */
@@ -38,7 +38,7 @@ export type Unsubscribe = () => void;
 /** Cancellation is local transport state, never part of the JSON payload. */
 export interface RequestOptions { signal?: AbortSignal }
 
-// ───────────────────────── 視線追蹤 ─────────────────────────
+// ───────────────────────── Gaze tracking ─────────────────────────
 
 export type AttentionStatus = 'stopped' | 'starting' | 'running' | 'error';
 
@@ -48,6 +48,7 @@ export interface CalibrationTarget extends CalibrationPoint {
   validation: boolean;
   count: number;
   recheck?: boolean;
+  awaitingStart?: boolean;
   fallback?: 'geometry' | 'verification';
 }
 
@@ -77,6 +78,7 @@ export interface AttentionProvider {
   readonly calibrationModel?: 'blazegaze' | 'eyetheia';
   calibrationDiagnostics?(): TrackerCalibrationDiagnostics | null;
   prepareCalibration?(): void;
+  startCalibrationStage?(): void;
   skipCalibration?(): void;
   /** The provider emits an event after its own dwell rule. */
   readonly usesOffscreenRule?: boolean;
@@ -90,7 +92,7 @@ export interface AttentionProvider {
   readonly needsCamera: boolean;
 }
 
-// ───────────────────────── AI 分析 ─────────────────────────
+// ───────────────────────── Content analysis ─────────────────────────
 
 export interface ContentProvider {
   readonly name: string;
@@ -116,7 +118,7 @@ export interface ContentProvider {
   retractWrongFact?(deckId: string, slideIndex: number, variantId: string): void;
 }
 
-// ───────────────────────── 做影片 ─────────────────────────
+// ───────────────────────── Media generation ─────────────────────────
 
 export interface MediaProvider {
   readonly name: string;
@@ -133,7 +135,7 @@ export interface MediaProvider {
   listVoices(): Promise<{ id: string; label: string }[]>;
 }
 
-// ───────────────────────── 個人化 AI ─────────────────────────
+// ───────────────────────── Adaptive AI ─────────────────────────
 
 export type MemorySource = 'live' | 'replay';
 

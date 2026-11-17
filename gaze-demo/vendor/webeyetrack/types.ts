@@ -26,9 +26,13 @@ export interface GazeResult {
 
   // Gaze state (blinking)
   gazeState: 'open' | 'closed';
+  eyeAspect?: number[];
 
   // PoG (normalized screen coordinates)
   normPog: Array<number>; // [2,] - Normalized screen coordinates
+  rawGaze?: number[];
+  mappedGaze?: number[];
+  unclippedGaze?: number[];
 
   // Meta data
   durations: Record<string, number>; // seconds

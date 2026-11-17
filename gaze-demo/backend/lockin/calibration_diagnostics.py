@@ -14,6 +14,35 @@ from .schemas import Strict
 Count = Annotated[int, Field(ge=0, le=1_000_000)]
 Dimension = Annotated[int, Field(ge=0, le=32768)]
 Duration = Annotated[int, Field(ge=0, le=86_400_000)]
+Finite = Annotated[float, Field(allow_inf_nan=False)]
+Pair = tuple[Finite, Finite]
+
+
+class SampleSummary(Strict):
+    index: int = Field(ge=1, le=12)
+    mode: Literal['calibration', 'validation', 'quick-check']
+    target: Pair
+    sampleCount: int = Field(ge=1, le=7)
+    rawSamples: list[Pair] = Field(max_length=7)
+    rawMedian: Pair
+    rawMad: Pair
+    rawRange: Pair
+    mappedMedian: Pair
+    unclippedMedian: Pair
+    predicted: Pair
+    clippedSamples: int = Field(ge=0, le=7)
+    durationMs: float = Field(ge=0, allow_inf_nan=False)
+    errorNormalized: Finite | None
+    errorPx: Finite | None
+
+
+class Fit(Strict):
+    method: Literal['median-7-affine-v1']
+    inputSingularValues: Pair
+    inputConditionNumber: Finite | None
+    matrix: tuple[tuple[Finite, Finite, Finite], tuple[Finite, Finite, Finite]] | None
+    pointErrors: list[Finite] = Field(max_length=9)
+    rmse: Finite | None
 
 
 class Viewport(Strict):
@@ -51,9 +80,13 @@ class Tracker(Strict):
     frames: Frames
     camera: tuple[Dimension, Dimension] | None = None
     validation: Validation | None = None
+    method: Literal['median-7-affine-v1'] | None = None
+    fit: Fit | None = None
+    points: list[SampleSummary] = Field(default_factory=list, max_length=18)
 
 
 class Attempt(Strict):
+    schemaVersion: Literal[1, 2] = 1
     attemptId: UUID
     startedAt: int = Field(gt=0)
     durationMs: Duration

@@ -258,6 +258,16 @@ export default class WebEyeTrack {
     ];
   }
 
+  fit(predictions: number[][], targets: number[][]): number[][] {
+    const matrix = computeAffineMatrixML(predictions, targets);
+    if (!matrix.flat().every(Number.isFinite)) throw new Error('Non-finite calibration matrix');
+    const tensor = tf.tensor2d(matrix, [2, 3], 'float32');
+    this.affineMatrix?.dispose();
+    this.affineMatrix = tensor;
+    this.resetFilter();
+    return matrix;
+  }
+
   async adapt(
     eyePatches: ImageData[],
     headVectors: number[][],
@@ -405,6 +415,7 @@ export default class WebEyeTrack {
         faceOrigin3D: faceOrigin3D,
         metric_transform: {rows: 3, columns: 3, data: [1, 0, 0, 1, 0, 0, 1, 0, 0]}, // Placeholder, should be computed
         gazeState: gaze_state,
+        eyeAspect: [leftEAR, rightEAR],
         normPog: [0, 0],
         durations: {
           faceLandmarker: tic2 - tic1,
@@ -427,6 +438,7 @@ export default class WebEyeTrack {
       const headVectorTensor = tf.tensor2d(headVector, [1, 3]);
       const faceOriginTensor = tf.tensor2d(faceOrigin3D, [1, 3]);
       let outputTensor = this.blazeGaze.predict(normalizedInputTensor, headVectorTensor, faceOriginTensor);
+      const rawOutput = outputTensor;
       tf.dispose([inputTensor, normalizedInputTensor, headVectorTensor, faceOriginTensor]);
       const tic4 = performance.now();
 
@@ -439,14 +451,17 @@ export default class WebEyeTrack {
       if (!outputTensor || outputTensor.shape.length === 0) {
         throw new Error("BlazeGaze model did not return valid output");
       }
-      return [outputTensor, tic4];
+      return [tf.concat([rawOutput, outputTensor], 1), tic4];
     });
 
     const normPog = predNormPog.arraySync() as number[][];
     tf.dispose(predNormPog);
+    const rawGaze = normPog[0].slice(0, 2);
+    const mappedGaze = normPog[0].slice(2, 4);
 
     // Apply Kalman filter to smooth the gaze point
-    const kalmanOutput = this.kalmanFilter.step(normPog[0]);
+    const kalmanOutput = this.kalmanFilter.step(mappedGaze);
+    const unclippedGaze = [...kalmanOutput];
     const tic5 = performance.now();
 
     // Clip the output to the range of [-0.5, 0.5]
@@ -472,7 +487,11 @@ export default class WebEyeTrack {
       faceOrigin3D: faceOrigin3D,
       metric_transform: {rows: 3, columns: 3, data: [1, 0, 0, 1, 0, 0, 1, 0, 0]}, // Placeholder, should be computed
       gazeState: gaze_state,
+      eyeAspect: [leftEAR, rightEAR],
       normPog: kalmanOutput,
+      rawGaze,
+      mappedGaze,
+      unclippedGaze,
       durations: durations,
       timestamp: timestamp
     };

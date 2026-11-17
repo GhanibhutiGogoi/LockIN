@@ -25,17 +25,18 @@ npm run dev
 ## 模型与校准
 
 - 预训练模型：WebEyeTrack / BlazeGaze，TensorFlow.js 本机推理。
-- 校准：利用上游 `adapt` 的仿射映射修正（`stepsInner = 0`），不进行 CNN 或预测头的梯度训练。9 个目标，每个目标采集 7 帧，保留其中 1 帧用于坐标映射；全部有效帧用于估计个人几何范围。
-- 验证：另外 3 个位置，显示预测点与目标点距离相对于窗口对角线的平均比例。此数字是本次引导验证结果，不代表阅读时的真实定位精度。
+- Calibration: no gradient training of the CNN or prediction head. Collect 7 valid frames at each of 9 targets, take coordinate-wise medians of raw X/Y predictions before smoothing and clipping, and fit an affine mapping from the 9 representative coordinate pairs (`median-7-affine-v1`). All valid frames still contribute to the personal geometry envelope.
+- Validation: collect 7 valid samples at each of 3 separate positions, take coordinate-wise medians of predicted X/Y, and calculate the normalized Euclidean distance to each target: `sqrt((dx_px / width)^2 + (dy_px / height)^2)`, where `dx_px` and `dy_px` are pixel differences between the prediction and target. The UI shows 3 errors; each must be below `0.22` to pass. These values are not mean errors, angles, or fractions of the viewport diagonal. Guided validation results do not establish gaze accuracy during reading.
 - gaze 点显示在当前浏览器视口内。本版没有屏幕共享、外部窗口内容识别或桌面坐标映射。
 
 ## 屏幕外规则
 
 以个人校准数据中头部方向 X/Y、左右眼虹膜相对眼角的位置（共 6 维）的 2%–98% 范围为基准，加上可调容差。
 
-- 头部方向明显越界，或两只眼睛的相对位置同时越界，作为屏外证据。
+- Bilateral eye departure on at least one shared axis, without opposing evidence on the other axis, can independently establish off-screen evidence without requiring the model coordinates to leave the screen. Substantial head movement requires a wider margin (at least 0.25 head-vector component units); smaller movements require unclipped coordinates at least 0.05 beyond the screen boundary. Substantial head orientation can establish departure when eye data is unavailable; without that evidence, unilateral anomalies or opposing eye departures remain unknown.
+- Off-screen evidence requires at least 600 ms across at least 3 valid frames before entering the dwell rule. Unknown intervals up to 800 ms pause confirmation without adding unknown time. Long interruptions, stale frames, and a sustained one-second screen return clear confirmation; brief screen peeks only pause accumulation. Bilateral eye closure lasting 1.5 seconds provides non-focus evidence; normal blinks do not confirm it. These engineering heuristics still require real-user testing.
 - 默认连续 2 秒才显示「看向屏幕外」；回到范围持续 1 秒才确认恢复。
-- 闭眼、脸部丢失、无效数据、超过 1 秒的采样间隔会中断证据累计；不会被计作分心。
+- Missing faces, invalid data, and stale samples interrupt evidence accumulation and count as neither focus nor distraction. Confirmed eye closure counts as non-focus. Main-app timing parameters are in `backend/static/attention-policy.js`; a qualified event still requires 30 seconds of accumulated evidence.
 - 该规则可能漏掉头部不动的细微眼球偏转，也可能把校准后坐姿变化误判为屏外。看着屏幕仍然可能走神，本原型不判断脑内走神。
 
 ## 数据
@@ -51,7 +52,7 @@ npm run dev
 - MediaPipe 使用本地同版本 WASM 与模型，并在 GPU 不可用时尝试 CPU。
 - 添加校准重置与平滑重置；零梯度步骤时不创建优化器，释放临时合并张量。
 - 使用独立、串行处理帧的 classic Worker；不使用上游任意鼠标点击自动校准的 Proxy。
-- 在应用适配层过滤闭眼、缺脸占位坐标，不以裁剪到屏幕内的 gaze 坐标判断屏外。
+- The application adapter filters placeholder coordinates from closed-eye and missing-face results. Reliable head orientation and sustained eye closure can independently provide non-focus evidence without inventing gaze coordinates.
 
 `public/web/` 中的预训练权重来自同一上游版本。MediaPipe Face Landmarker 原始来源：
 https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
@@ -91,7 +92,7 @@ npm run build
 
 - 播放期间看屏比例只衡量看屏，不代表学习恢复。生成/读取等待、暂停、答题时间与返回后观察分开。
 - 返回后任务相关注视比例的分母是有效观测时间，同时报告有效覆盖率。无数据不算专注或分心。
-- 闭眼、缺脸、后台标签页、失去校准、过期采样间隔均会中断证据。当前 Web 原型不能可靠持续监控隐藏标签页；后台时间为未知。
+- Missing faces, background tabs, lost calibration, and stale sampling intervals interrupt evidence. Observable sustained eye closure counts as non-focus. The current web prototype cannot reliably monitor hidden tabs continuously; background time remains unknown.
 - 窗口提前结束、摄像头停止、视频失败等记录会标记未完成/censored，不记为成功。
 - 这些是可观测代理指标，尚未通过真实用户验证；不能证明视频造成了改善，也不能检测看着课件时的脑内走神。
 

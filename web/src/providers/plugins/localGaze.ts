@@ -41,6 +41,10 @@ export class LocalGazeProvider implements AttentionProvider {
     this.skipped = true;
   }
 
+  startCalibrationStage() {
+    this.capture?.startCalibrationStage();
+  }
+
   async start(stream: MediaStream | null) {
     if (this.skipped) return;
     if (!stream) throw new Error('Allow camera access before starting gaze tracking.');
@@ -79,6 +83,7 @@ export class LocalGazeProvider implements AttentionProvider {
     const capture = new GazeCapture(video, (message) => this.onCaptureStatus(capture, message), {
       assetBase,
       model: this.calibrationModel,
+      manualStages: true,
       onObservation: (observation) => this.publish(observation),
       onCalibrationPoint: (target) => this.calibration?.show(
         target && !target.recheck && this.fallback ? { ...target, fallback: this.fallback } : target,
@@ -212,23 +217,27 @@ export class LocalGazeProvider implements AttentionProvider {
     this.statuses.forEach((cb) => cb(status, detail));
   }
 
-  private publish({ sample, offscreen, capturedAt }: GazeObservation) {
+  private publish({ sample, offscreen, capturedAt, diagnostic }: GazeObservation) {
     const valid = sample.valid && sample.calibrated && sample.on_screen !== null;
+    const focused = valid && sample.on_screen && offscreen.state === 'screen';
     const offscreenLapse = valid && !sample.on_screen && offscreen.count > this.lastOffscreenEvent;
     this.lastOffscreenEvent = offscreen.count;
     const result: FocusSample = {
       t: Math.floor(performance.timeOrigin + capturedAt),
-      score: valid && sample.on_screen ? 100 : 0,
+      score: focused ? 100 : 0,
       confidence: valid ? 1 : 0,
       offscreenLapse,
+      gazeDiagnostic: diagnostic,
       gazeTracking: {
         state: offscreen.state,
         awayMs: offscreen.away_ms,
         thresholdMs: offscreen.threshold_ms,
+        reason: sample.reason ?? undefined,
+        returnMs: offscreen.return_ms,
       },
     };
     if (valid) {
-      result.signals = { gaze: Number(sample.on_screen), eyesOpen: 1, facePresent: 1 };
+      result.signals = { gaze: Number(focused), eyesOpen: sample.eyes_open === false ? 0 : 1, facePresent: 1 };
       if (sample.on_screen && sample.x !== null && sample.y !== null) {
         const x = sample.x + 0.5;
         const y = sample.y + 0.5;

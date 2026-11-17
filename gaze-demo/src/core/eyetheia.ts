@@ -5,8 +5,10 @@ import type { GazeResult } from '../../vendor/webeyetrack/types';
 import { KalmanFilter2D } from '../../vendor/webeyetrack/utils/filter';
 import { computeAffineMatrixML, computeEAR, getHeadVector, translateMatrix } from '../../vendor/webeyetrack/utils/mathUtils';
 
-type EyeTheiaResult = Pick<GazeResult, 'facialLandmarks' | 'faceBlendshapes' | 'headVector' | 'gazeState' | 'normPog'> & {
+type EyeTheiaResult = Pick<GazeResult, 'facialLandmarks' | 'faceBlendshapes' | 'headVector' | 'gazeState' | 'normPog' | 'eyeAspect'> & {
   rawGaze?: number[];
+  mappedGaze?: number[];
+  unclippedGaze?: number[];
 };
 type Crop = [x: number, y: number, width: number, height: number];
 
@@ -76,8 +78,11 @@ export class EyeTheiaTracker {
   }
 
   fit(predictions: number[][], targets: number[][]) {
-    this.affine = computeAffineMatrixML(predictions, targets);
+    const matrix = computeAffineMatrixML(predictions, targets);
+    if (!matrix.flat().every(Number.isFinite)) throw new Error('Non-finite calibration matrix');
+    this.affine = matrix;
     this.resetFilter();
+    return matrix;
   }
 
   private imageInput(box: Crop) {
@@ -106,7 +111,9 @@ export class EyeTheiaTracker {
       gazeState: 'closed',
       normPog: [0, 0],
     };
-    if (!matrix || computeEAR(landmarks, 'left') < 0.2 || computeEAR(landmarks, 'right') < 0.2) return result;
+    if (!matrix || landmarks.length < 478) return result;
+    result.eyeAspect = [computeEAR(landmarks, 'left'), computeEAR(landmarks, 'right')];
+    if (result.eyeAspect.some(value => value < .2)) return result;
 
     const { width, height } = frame;
     const face = cropBox(landmarks, FACE, width, height);
@@ -130,6 +137,6 @@ export class EyeTheiaTracker {
       ? this.affine.map(([a, b, c]) => a * x + b * y + c)
       : [x - 0.5, y - 0.5];
     const smoothed = this.filter.step(centered);
-    return { ...result, gazeState: 'open', rawGaze: [x, y], normPog: smoothed.map(value => Math.max(-0.5, Math.min(0.5, value))) };
+    return { ...result, gazeState: 'open', rawGaze: [x, y], mappedGaze: centered, unclippedGaze: [...smoothed], normPog: smoothed.map(value => Math.max(-0.5, Math.min(0.5, value))) };
   }
 }

@@ -73,6 +73,26 @@ continue with window tracking. Camera frames are processed in the browser and
 discarded. A qualified 30-second off-screen event can start one rescue per
 excursion, subject to the session's cooldown and note-taking controls.
 
+Screen membership uses calibrated head/iris bounds and the unclipped mapped gaze.
+Bilateral departure on one shared axis (without opposing evidence on the other)
+can establish off-screen evidence even if the gaze projection stays inside.
+Substantial head movement uses a wider margin (at least 0.25 head-vector units);
+smaller movements require a mapped position beyond the screen boundary by 0.05.
+Reliable substantial head orientation can establish departure even when eye geometry or gaze coordinates are unavailable.
+Without that head evidence, one-eye occlusion, opposing eye directions and implausible iris positions stay unknown.
+Departure confirmation requires 600 ms across at least three frames; bilateral eye closure requires 1500 ms.
+Short screen peeks pause accumulated away time; only 1000 ms continuously on screen clears it.
+Unknown gaps up to 800 ms pause confirmation without counting unobserved time; longer gaps clear unfinished time.
+Missing faces remain unknown. Sustained eye closure is non-focus and follows the same 30-second rescue rule.
+Timing defaults are shared in `gaze-demo/backend/static/attention-policy.js`. These heuristics require real webcam testing.
+Downloaded reports include `log.gazeDiagnostics`: numeric 1 Hz observations, decision reasons, head/eye measurements,
+timer resets and rule version. The latest 7200 entries are retained with a dropped-entry count; no camera images are stored.
+These diagnostics are attached locally after the adaptive-service request.
+
+Reports label the median measured focus stretch, show the longest measured stretch
+and measured active time, and break timeline paths across missing observations.
+Missing measurements are neither focused nor unfocused time.
+
 Run **Integrations → Run contract check** during a calibrated session to inspect
 live samples. The separate [gaze demo](../gaze-demo/backend/README.md) also
 contains the standalone calibration diagnostics, screen-sharing attention
@@ -192,9 +212,30 @@ Calibration attempts from the Web app write one JSON file per result under
 `gaze-demo/backend/data/calibration-diagnostics/` on the local machine.
 Reports include the outcome, the stage reached, camera error name and size,
 per-point sample progress, frame-quality counts, and aggregate validation error.
-They contain no camera or screen pixels, device identifiers, or gaze coordinates.
+Version 2 adds the seven raw predictions per target, coordinate-wise medians,
+median absolute deviations, fitted affine matrix, input singular values and
+condition number, training residuals, validation target/prediction coordinates,
+and counts of samples clipped to screen boundaries. A null condition number
+means it was non-finite; inspect the singular values for degenerate input.
+They contain numeric coordinates but no camera or screen pixels or device identifiers.
 If the local API is unavailable, the browser queues up to 20 reports to retry
 the next time the app loads. Set `LOCKIN_CALIBRATION_DIR` to override the backend path.
+
+The browser also keeps the last 20 completed reports in
+`lockin.calibrationDiagnostics`, including reports already uploaded locally.
+For a comparison trial, hard-refresh the page, keep the window and seating
+position fixed, and complete three full 9-point calibrations with 3-point
+validation. Refresh between trials. Open DevTools only after validation finishes;
+docking it during calibration changes the viewport and invalidates the attempt.
+Run this in the Chrome console and paste the clipboard contents when reporting results:
+
+```js
+copy(JSON.stringify(JSON.parse(localStorage.getItem('lockin.calibrationDiagnostics') || '[]').filter(d => d.schemaVersion === 2).slice(-3), null, 2))
+```
+
+`copy()` returns `undefined` normally; the report is on the clipboard.
+The calibration method should be `median-7-affine-v1`. Each target still needs
+7 valid samples, and every validation error must remain below `0.22`.
 
 ### Screen activity and study goals
 

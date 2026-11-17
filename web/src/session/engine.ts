@@ -47,6 +47,8 @@ interface Runtime {
   offscreenLapseAt: number | null;
   gazeTracking?: { t: number; value: GazeTracking };
   log: FocusLogEntry[];
+  gazeDiagnostics: NonNullable<SessionLog['gazeDiagnostics']>;
+  latestDiagnostic?: { t: number; value: NonNullable<FocusSample['gazeDiagnostic']> };
   outcomes: RescueOutcome[];
   pending: Pending[];
   recentVariants: string[];
@@ -208,6 +210,7 @@ async function startSession() {
     samples: [],
     offscreenLapseAt: null,
     log: [],
+    gazeDiagnostics: { samples: [], droppedSamples: 0 },
     activity: [],
     visitedSlides: new Set(screenStudy ? [] : [s.slideIndex]),
     outcomes: [],
@@ -342,6 +345,8 @@ export async function endSession() {
         : 'Personal AI service is unreachable. The report uses local numbers only.', 'error');
     }
     if (deck.sourceType !== 'screen' && log.samples.length >= 30 && log.attentionSource === 'gaze') actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
+    // Runtime diagnostics stay in the local report, outside the adaptive-service payload.
+    if (r.gazeDiagnostics.samples.length) log.gazeDiagnostics = r.gazeDiagnostics;
     const report = { deck, log, review, questions: r.questions };
     if (log.attentionSource === 'simulated' || deck.sourceType === 'demo' || deck.sourceType === 'screen') useApp.setState({ report });
     else await actions.saveReport(report);
@@ -364,6 +369,7 @@ function onSample(s: FocusSample) {
   const fresh = Number.isFinite(s.t) && now - s.t >= 0 && now - s.t < GAZE_FRESH_MS;
   if (s.gazeTracking) {
     if (!fresh || (rt.gazeTracking && s.t <= rt.gazeTracking.t)) return;
+    if (s.gazeDiagnostic) rt.latestDiagnostic = { t: s.t, value: s.gazeDiagnostic };
     rt.gazeTracking = { t: s.t, value: s.gazeTracking };
     if (s.confidence < 0.3) {
       rt.samples = [];
@@ -410,7 +416,8 @@ function tick() {
   // For tab-only sessions, returning to the tab can reset the machine without creating a gaze sample.
   const controlScore = score ?? (registry.config?.attention.mode === 'off' ? rt.cfg.enterFocused : null);
   const res = step(rt.machine, {
-    now, score: hasContext ? controlScore : null, windowActive: screenStudy || active, eyesClosed, noteTaking,
+    // Local gaze handles sustained closure through its validated non-focus dwell rule.
+    now, score: hasContext ? controlScore : null, windowActive: screenStudy || active, eyesClosed: provider.usesOffscreenRule ? false : eyesClosed, noteTaking,
     offscreenRule: provider.usesOffscreenRule, offscreenLapse: hasContext && offscreenLapse,
   }, rt.cfg);
   rt.machine = res.m;
@@ -426,6 +433,12 @@ function tick() {
   if (sec !== rt.lastLogSec) {
     rt.lastLogSec = sec;
     if (score !== null) rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
+    if (rt.latestDiagnostic && !['paused', 'break'].includes(m.state)) {
+      const { t, value } = rt.latestDiagnostic;
+      const diagnostic = now - t < GAZE_FRESH_MS ? value : { ...value, reason: 'stale_frame', rawOutside: null, confirmedOutside: null, eyeAspect: null, head: null, features: null, mappedGaze: null };
+      rt.gazeDiagnostics.samples.push({ ...diagnostic, t: sec });
+      if (rt.gazeDiagnostics.samples.length > 7200) { rt.gazeDiagnostics.samples.shift(); rt.gazeDiagnostics.droppedSamples++; }
+    }
     rt.activity.push({ t: sec, slideIndex: s.slideIndex, windowActive: active, paused: m.state === 'paused' || m.state === 'break' });
     const eligibleState = m.state === 'focused' || m.state === 'drifting' || m.state === 'recovering';
     const validGaze = gazeFresh && gaze.value.state !== 'unknown' && score !== null;

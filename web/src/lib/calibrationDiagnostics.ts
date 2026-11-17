@@ -3,6 +3,7 @@ import type { CalibrationTarget } from '../contracts/providers';
 import type { CameraStatus } from './camera';
 
 const KEY = 'lockin.pendingCalibrationDiagnostics';
+const HISTORY_KEY = 'lockin.calibrationDiagnostics';
 const ENDPOINT = '/v1/web-screen/calibration-diagnostics';
 
 interface CalibrationPointProgress {
@@ -14,6 +15,7 @@ interface CalibrationPointProgress {
 }
 
 interface CalibrationDiagnostic {
+  schemaVersion: 2;
   attemptId: string;
   startedAt: number;
   durationMs: number;
@@ -90,8 +92,13 @@ export function startCalibrationDiagnostic(model: CalibrationDiagnostic['model']
       if (completed) return;
       completed = true;
       const diagnostic: CalibrationDiagnostic = {
-        ...fields, attemptId, startedAt, viewport, points, model, durationMs: Math.round(performance.now() - start),
+        ...fields, schemaVersion: 2, attemptId, startedAt, viewport, points, model, durationMs: Math.round(performance.now() - start),
       };
+      // Keep completed diagnostics available even after a successful local upload.
+      try {
+        const history: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]');
+        localStorage.setItem(HISTORY_KEY, JSON.stringify([...(Array.isArray(history) ? history : []), diagnostic].slice(-20)));
+      } catch { /* The pending queue remains available if history storage fails. */ }
       const queued = savePending([...pending(), diagnostic]);
       if (await upload(diagnostic)) return 'saved';
       return queued ? 'queued' : 'failed';

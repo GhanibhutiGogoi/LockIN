@@ -46,7 +46,7 @@ async function camera(t,{expression=false,model,workerReady=true,sourceWidth=640
     Worker:class {
       postMessage(message){
         messages.push(message);
-        if(message.type==='init'&&workerReady)this.onmessage({data:{type:'ready',protocolVersion:3,captureRounds:true}});
+        if(message.type==='init'&&workerReady)this.onmessage({data:{type:'ready',protocolVersion:5,captureRounds:true}});
         if(message.type==='frame')this.onmessage({data:{type:'result',capturedAt:message.timestamp,captureRound:message.captureRound,face:true,eyesOpen:true,gaze:[0,0]}});
       }
       terminate(){}
@@ -74,6 +74,37 @@ test('a borrowed camera stays owned by the study UI and calibration targets go t
   assert.equal(targets.at(-1),null);
   assert.equal(c.video.srcObject,null);
   assert.equal(c.track.readyState,'live');
+});
+
+test('manual calibration and validation wait for separate start actions without point timers',async t=>{
+  const targets=[];
+  const c=await camera(t,{borrowed:true,onCalibrationPoint:point=>targets.push(point)});
+  c.gaze.manualStages=true;
+  c.gaze.calibrate();
+  assert.equal(c.gaze.phase,'awaiting-start');
+  assert.equal(targets.at(-1).awaitingStart,true);
+  assert.equal(c.messages.filter(m=>m.type==='point').length,0);
+  c.setTime(30000);c.gaze.startCalibrationStage();
+  assert.equal(c.messages.at(-1).point.startedAt,30000);
+  for(let index=0;index<9;index++)c.gaze.next({index,validation:false,calibrationId:c.gaze.calibrationId});
+  assert.equal(c.gaze.phase,'fitting');
+  c.gaze.worker.onmessage({data:{type:'fitted',calibrationId:c.gaze.calibrationId}});
+  assert.equal(c.gaze.phase,'awaiting-start');
+  assert.equal(targets.at(-1).validation,true);
+  assert.equal(c.messages.filter(m=>m.type==='point').length,9);
+  c.setTime(90000);c.gaze.startCalibrationStage();
+  assert.equal(c.messages.at(-1).point.validation,true);
+  assert.equal(c.messages.at(-1).point.startedAt,90000);
+});
+
+test('quick validation starts its original deadline after the instructions are dismissed',async t=>{
+  const c=await camera(t,{borrowed:true,onCalibrationPoint:()=>{}});
+  c.gaze.manualStages=true;c.gaze.canRecheck=true;
+  assert.equal(c.gaze.revalidate(),true);
+  c.setTime(60000);c.gaze.startCalibrationStage();
+  assert.equal(c.gaze.quickDeadline,68000);
+  c.gaze.cancel();c.gaze.startCalibrationStage();
+  assert.equal(c.gaze.phase,'idle');
 });
 
 test('16:9 camera frames preserve geometry in both canvas sampling and worker input',async t=>{
@@ -356,6 +387,30 @@ test('all three validation targets are unseen positions excluded from the person
   }
 });
 
+test('detailed diagnostics preserve the original 0.22 validation gate and remain available after failure',async t=>{
+  const c=await camera(t);c.gaze.calibrate();
+  for(let i=0;i<9;i++)c.gaze.worker.onmessage({data:pointReply(c)});
+  const fit={method:'median-7-affine-v1',matrix:[[1,0,0],[0,1,0]],pointErrors:Array(9).fill(0),rmse:0,inputSingularValues:[1,1],inputConditionNumber:1};
+  c.gaze.worker.onmessage({data:{type:'fitted',calibrationId:c.gaze.calibrationId,fitDiagnostics:fit}});
+  for(const error of [.24,.17,.30]){
+    const d=pointReply(c);d.predicted=[d.target[0]+error,d.target[1]];
+    d.diagnostics={sampleCount:7,rawSamples:Array(7).fill([.1,.2]),clippedSamples:0};
+    c.gaze.worker.onmessage({data:d});
+  }
+  const report=c.gaze.calibrationDiagnostics();
+  assert.equal(c.gaze.calibrated,false);
+  assert.equal(report.validation.threshold,.22);
+  assert.equal(report.fit,fit);
+  assert.equal(report.points.length,3);
+  assert.equal(report.points[0].mode,'validation');
+  assert.ok(Math.abs(report.points[0].errorNormalized-.24)<1e-10);
+  assert.ok(Math.abs(report.points[0].errorPx-240)<1e-8);
+  c.gaze.calibrate();
+  assert.equal(c.gaze.calibrationDiagnostics().fit,null);
+  assert.equal(c.gaze.calibrationDiagnostics().points.length,0);
+  assert.equal(report.points.length,3);
+});
+
 test('fallback observes frame age while the worker is busy and cannot rejuvenate a frozen frame',async t=>{
   const c=await camera(t),post=c.gaze.worker.postMessage.bind(c.gaze.worker);let held=false;
   c.gaze.worker.postMessage=m=>{if(m.type==='frame'&&!held){held=true;return;}post(m);};
@@ -381,7 +436,7 @@ test('an old generated worker fails with a build instruction rather than hanging
 test('EyeTheia rejects a worker that silently initializes another model',async t=>{
   const c=await camera(t,{model:'eyetheia',workerReady:false});let status='';c.gaze.status=m=>status=m;
   assert.equal(c.messages.find(m=>m.type==='init').model,'eyetheia');
-  c.gaze.worker.onmessage({data:{type:'ready',protocolVersion:3,captureRounds:true,model:'blazegaze'}});
+  c.gaze.worker.onmessage({data:{type:'ready',protocolVersion:5,captureRounds:true,model:'blazegaze'}});
   assert.equal(c.gaze.ready,false);
   assert.match(status,/EyeTheia.*npm run build/);
 });
@@ -405,13 +460,29 @@ test('a degenerate personal fit fails calibration with a readable retry while th
   const fit=c.messages.filter(m=>m.type==='fit').at(-1);let status='';c.gaze.status=m=>status=m;
   c.gaze.worker.onmessage({data:{type:'error',operation:'fit',calibrationId:fit.calibrationId,message:'Matrix is rank deficient'}});
   assert.equal(c.gaze.ready,true);assert.equal(c.gaze.phase,'idle');assert.equal(c.gaze.sample().calibrated,false);
-  assert.equal(c.gaze.diagnostics().issue,'fit_failed');assert.match(status,/校准.*重试/);
+  assert.equal(c.gaze.diagnostics().issue,'fit_failed');assert.match(status,/Calibration.*retry/);
   assert.doesNotThrow(()=>c.gaze.calibrate());
 });
 
 function geometryFrame(c,t,outside,extra={}){
   c.setTime(t);c.gaze.worker.onmessage({data:{type:'result',capturedAt:t,face:true,eyesOpen:true,gaze:[.4,.1],outside,calibrationId:c.gaze.calibrationId,...extra}});
 }
+
+test('confirmed head-away and closed-eye evidence survives capture without inventing gaze coordinates',async t=>{
+  const c=await camera(t);
+  for(const [index,reason] of ['head_away','eyes_closed'].entries()){
+    geometryFrame(c,1100+index*100,true,{eyesOpen:false,gaze:null,attentionValid:true,attentionReason:reason});
+    assert.equal(c.gaze.sample().valid,true);assert.equal(c.gaze.sample().on_screen,false);
+    assert.equal(c.gaze.sample().x,null);assert.equal(c.gaze.sample().y,null);
+    assert.equal(c.gaze.sample().eyes_open,false);
+  }
+  geometryFrame(c,1300,true,{face:false,eyesOpen:false,gaze:null,attentionValid:true,attentionReason:'head_away'});
+  assert.equal(c.gaze.sample().valid,false);
+  geometryFrame(c,1400,null,{eyesOpen:false,gaze:null,attentionValid:false,attentionReason:'eyes_closed'});
+  assert.equal(c.gaze.sample().valid,false);
+  geometryFrame(c,1500,true,{eyesOpen:false,gaze:[0,0]});
+  assert.equal(c.gaze.sample().valid,false);
+});
 test('capture uses independent geometry evidence for screen membership and records a thirty-second event',async t=>{
   const c=await camera(t);geometryFrame(c,1000,true);assert.equal(c.gaze.sample().on_screen,false);
   for(let t=1100;t<=31000;t+=100)geometryFrame(c,t,true);
@@ -439,5 +510,5 @@ test('a frame arriving after camera geometry changes cannot overwrite the restar
   const c=await camera(t);c.tick(1000);let status='';c.gaze.status=m=>status=m;
   c.video.videoWidth=1280;c.video.videoHeight=720;
   geometryFrame(c,1100,true,{capturedAt:1000});
-  assert.equal(c.gaze.diagnostics().reason,'camera_changed');assert.match(status,/尺寸.*重新/);
+  assert.equal(c.gaze.diagnostics().reason,'camera_changed');assert.match(status,/dimensions.*restart/);
 });
