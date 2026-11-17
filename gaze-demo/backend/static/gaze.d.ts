@@ -1,4 +1,4 @@
-import type { CalibrationFitDiagnostics, CalibrationPointSummary } from '../../src/core/calibration';
+import type { CalibrationFitDiagnostics, CalibrationPointSummary } from '../../src/core/calibration-types';
 import type { ATTENTION_TIMING } from './attention-policy.js';
 
 export interface TrackerRuntimeDiagnostic {

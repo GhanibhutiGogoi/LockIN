@@ -1,4 +1,7 @@
 import { Matrix, SingularValueDecomposition } from 'ml-matrix';
+import type { CalibrationFitDiagnostics, CalibrationPointSummary } from './calibration-types';
+
+export type { CalibrationFitDiagnostics, CalibrationPointSummary } from './calibration-types';
 
 export interface CalibrationSample {
   rawGaze: number[];
@@ -18,7 +21,7 @@ function median(values: number[]) {
 }
 const medianPair = (values: number[][]) => [0, 1].map(i => median(values.map(v => v[i])));
 
-export function summarizeCalibrationPoint(samples: CalibrationSample[]) {
+export function summarizeCalibrationPoint(samples: CalibrationSample[]): CalibrationPointSummary {
   const rawSamples = samples.map(s => [...s.rawGaze]);
   const rawMedian = medianPair(rawSamples);
   return {
@@ -34,7 +37,7 @@ export function summarizeCalibrationPoint(samples: CalibrationSample[]) {
   };
 }
 
-export function calibrationFitDiagnostics(predictions: number[][], targets: number[][], matrix: number[][] | null = null) {
+export function calibrationFitDiagnostics(predictions: number[][], targets: number[][], matrix: number[][] | null = null): CalibrationFitDiagnostics {
   const mean = [0, 1].map(i => predictions.reduce((sum, p) => sum + p[i], 0) / predictions.length);
   const singularValues = new SingularValueDecomposition(new Matrix(predictions.map(p => p.map((v, i) => v - mean[i])))).diagonal;
   const condition = singularValues[0] / singularValues[1];
@@ -51,6 +54,3 @@ export function calibrationFitDiagnostics(predictions: number[][], targets: numb
     rmse: pointErrors.length ? Math.sqrt(pointErrors.reduce((sum, e) => sum + e * e, 0) / pointErrors.length) : null,
   };
 }
-
-export type CalibrationPointSummary = ReturnType<typeof summarizeCalibrationPoint>;
-export type CalibrationFitDiagnostics = ReturnType<typeof calibrationFitDiagnostics>;
