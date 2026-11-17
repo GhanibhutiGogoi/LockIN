@@ -6,6 +6,7 @@ import { devlog, type DevLogEntry } from '../lib/devlog';
 import { buildSampleReport } from '../lib/sampleReport';
 import { SIM_PROFILES, simulator } from '../providers/mock/attention';
 import { attentionPluginLabel, registry, TEAM_INFO, type ServiceTeam } from '../providers/registry';
+import { isRunning } from '../session/engine';
 import { DEFAULT_VARIANT } from '../session/packs';
 import { actions, useApp } from '../store';
 import { Icon } from './Icon';
@@ -121,7 +122,7 @@ function TeamCard({ team, mode, url }: { team: ServiceTeam; mode: string; url: s
         <select id={`mode-${team}`} className="field h-8 min-h-0 w-auto max-w-[170px] py-0 font-mono text-[12px]" value={mode} onChange={(e) => registry.set(team, { mode: e.target.value })}>
           {info.modes.map((m) => (
             <option key={m} value={m}>
-              {m === 'mock' ? (team === 'attention' ? 'simulator' : 'mock') : attentionPluginLabel(m) ?? m}
+              {m === 'mock' ? (team === 'attention' ? 'simulator' : 'mock') : m === 'memory' ? 'Local memory bank' : attentionPluginLabel(m) ?? m}
             </option>
           ))}
         </select>
@@ -183,14 +184,21 @@ const SAMPLE_CONTEXT: RescueContext = {
 async function contractCheck(team: ServiceTeam): Promise<string[]> {
   if (team === 'attention') {
     const p = registry.attention;
+    const useLiveCamera = p.needsCamera || !!p.calibrate;
+    if (useLiveCamera && (!isRunning() || useApp.getState().camera !== 'on')) {
+      throw new ContractError('Gaze tracking', ['Start a study session with camera access, complete calibration, then run this check.']);
+    }
     const got: FocusSample[] = [];
     const off = p.onSample((s) => got.push(s));
     try {
-      await p.start(null);
+      if (!useLiveCamera) await p.start(null);
       await new Promise((r) => setTimeout(r, 1500));
     } finally {
       off();
-      await p.stop().catch(() => {});
+      if (!useLiveCamera) await p.stop().catch(() => {});
+    }
+    if (useLiveCamera && !got.some((s) => s.confidence >= 0.3)) {
+      throw new ContractError('Gaze tracking', ['No calibrated gaze samples. Check the camera and use Settings → Recalibrate the camera.']);
     }
     if (got.length < 5) throw new ContractError('Gaze tracking', [`Only ${got.length} samples in 1.5 s; expected about 15 (10 Hz).`]);
     const scores = got.map((s) => s.score);
@@ -209,6 +217,10 @@ async function contractCheck(team: ServiceTeam): Promise<string[]> {
     if (problems.length) throw new ContractError('Video', problems);
     const loops = await registry.media.listGameplayLoops();
     return [`${m.captions.length} caption words over ${m.durationSec.toFixed(1)} s`, m.audioUrl ? `audio: ${m.audioUrl}` : 'no audioUrl (browser voice fallback)', `${m.broll.length} b-roll clip(s), ${loops.length} gameplay loop(s)`];
+  }
+  if (registry.adaptive.retrieveMemory) {
+    const memory = await registry.adaptive.retrieveMemory(DEMO_DECK.id, 'replay', useApp.getState().settings);
+    return ['SQLite memory bank connected', `${memory.decision.evidenceCount} eligible sample-deck simulator outcomes`];
   }
   const c = await registry.adaptive.chooseVariant(SAMPLE_CONTEXT);
   return [`picked ${c.variant.id}${c.isHoldout ? ' (holdout)' : ''}${c.isExplore ? ' (exploring)' : ''}`, `${c.variant.targetSeconds}s · ${c.variant.slangLevel} · ${c.variant.gameplayType}`];

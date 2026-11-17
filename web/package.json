@@ -7,6 +7,8 @@
     "dev": "vite",
     "dev:media": "vite --mode media",
     "dev:demo": "vite --mode demo",
+    "dev:gaze": "node scripts/start-gaze.mjs",
+    "gaze:assets": "node scripts/prepare-gaze.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",

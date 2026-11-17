@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import type { Deck } from '../contracts/types';
 import { importError, importPdf, validateSlideFile } from '../lib/deckImport';
 import { DEMO_MODE } from '../lib/features';
+import { shareStudyScreen } from '../lib/screenShare';
 import { registry, useIntegrationConfig } from '../providers/registry';
 import { formatDuration } from '../session/metrics';
 import { actions, useApp } from '../store';
@@ -12,10 +13,11 @@ import { Wordmark } from './Wordmark';
 
 export function DeskScreen() {
   const integrations = useIntegrationConfig();
-  const decks = useApp((s) => s.decks);
+  const decks = useApp((s) => s.decks).filter((deck) => deck.sourceType !== 'screen');
   const reports = useApp((s) => s.reports);
   const ready = useApp((s) => s.libraryReady);
   const warning = useApp((s) => s.libraryWarning);
+  const [goal, setGoal] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [over, setOver] = useState(false);
@@ -84,6 +86,17 @@ export function DeskScreen() {
               {registry.canRecap() ? 'AI recaps are enabled. You can request one during study.' : 'AI recaps are not connected yet. Slide study works without them.'}
               {registry.config.attention.mode === 'off' && ' Gaze tracking is unavailable; no attention score will be estimated.'}
             </p>
+            <form className="mt-7 grid gap-2 border-t border-rule pt-5" onSubmit={(e) => {
+              e.preventDefault();
+              void shareStudyScreen(false, goal);
+            }}>
+              <label htmlFor="screen-goal" className="text-[15px] font-semibold">What are you studying? <span className="font-normal text-graphite">(optional)</span></label>
+              <input id="screen-goal" type="text" maxLength={300} value={goal} onChange={(e) => setGoal(e.target.value)}
+                className="rounded-lg border border-rule bg-sheet px-3 py-2 text-[15px]" placeholder="e.g. Review reinforcement learning"
+                aria-describedby="screen-goal-help" />
+              <p id="screen-goal-help" className="text-[13px] text-graphite">Share a tab or window for local screen reading. Add a goal to enable activity reminders.</p>
+              <button type="submit" className="btn btn-quiet mt-1 justify-self-start" disabled={!!busy || !ready}>Share your screen</button>
+            </form>
             {DEMO_MODE && <button type="button" className="btn btn-quiet mt-4" onClick={async () => {
               const { DEMO_DECK } = await import('../lib/demoDeck');
               actions.addDeck(DEMO_DECK); study(DEMO_DECK);

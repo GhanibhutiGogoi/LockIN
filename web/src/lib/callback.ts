@@ -19,6 +19,10 @@ export function primeCue() {
     window.removeEventListener('pointerdown', unlock, true);
     window.removeEventListener('keydown', unlock, true);
   };
+  if (globalThis.navigator?.userActivation?.isActive) {
+    unlock();
+    return;
+  }
   window.addEventListener('pointerdown', unlock, true);
   window.addEventListener('keydown', unlock, true);
 }
@@ -59,10 +63,14 @@ export async function askNotificationPermission() {
 }
 
 /** Shows a notification if allowed. Returns a function that closes it. */
-export function notifyComeBack(): () => void {
+export function notifyComeBack(screenStudy = false): () => void {
   if (!notificationsSupported() || Notification.permission !== 'granted') return () => {};
   try {
-    const n = new Notification('Come back to your slides', { body: 'LockIn has a short recap of the slide you left.', tag: 'lockin-callback', silent: true });
+    const n = new Notification(screenStudy ? 'Your screen recap is ready' : 'Come back to your slides', {
+      body: screenStudy ? 'Return to LockIn to see the recap.' : 'LockIn has a short recap of the slide you left.',
+      tag: 'lockin-callback',
+      silent: true,
+    });
     n.onclick = () => {
       window.focus();
       n.close();
@@ -70,6 +78,25 @@ export function notifyComeBack(): () => void {
     return () => n.close();
   } catch {
     return () => {};
+  }
+}
+
+/** Shows only a generic reminder. The shared page and goal stay out of notifications. */
+export function notifyOffTopic() {
+  if (!notificationsSupported() || Notification.permission !== 'granted') return;
+  try {
+    const notification = new Notification('Back to your study goal?', {
+      body: 'The shared page may be unrelated to this session.',
+      tag: 'lockin-screen-activity',
+      silent: true,
+    });
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+    window.setTimeout(() => notification.close(), 8000);
+  } catch {
+    // The in-app reminder remains available.
   }
 }
 

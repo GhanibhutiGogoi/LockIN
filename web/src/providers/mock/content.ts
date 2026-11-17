@@ -16,6 +16,7 @@ function templateScript(deck: Deck, slide: Slide, variant: Variant, depth: 1 | 2
   const lines = text.split('\n').map((l) => l.replace(/^[-•·▪*]\s*/, '').trim()).filter(Boolean);
   const words = Math.round(variant.targetSeconds * 2.5 * variant.pacing);
   const lvl = variant.slangLevel;
+  const humourStyle = variant.humourStyle === 'analogies' ? 'memes' : variant.humourStyle;
 
   const hook: Record<SlangLevel, string> = {
     unhinged: `POV: you zoned out and “${slide.title}” is about to be on the exam.`,
@@ -53,7 +54,7 @@ function templateScript(deck: Deck, slide: Slide, variant: Variant, depth: 1 | 2
   const keyTerms = candidates.slice(0, 2).map((term) => ({ term, brollPrompt: `${term}, bold cartoon, neon colours, portrait` }));
 
   return {
-    variant: { targetSeconds: variant.targetSeconds, slangLevel: lvl, humourStyle: variant.humourStyle },
+    variant: { targetSeconds: variant.targetSeconds, slangLevel: lvl, humourStyle },
     hook: hook[lvl],
     script: sentences.join(' '),
     keyTerms,
@@ -87,14 +88,26 @@ function clozeQuestion(deck: Deck, slide: Slide, lvl: SlangLevel): QuizQuestion 
   };
 }
 
+const DEMO_ANALOGIES = [
+  'Think of glucose as money in the bank and ATP as cash in your pocket. Cellular respiration moves energy from the glucose into a form the cell can spend.',
+  'Picture a staircase down from glucose to carbon dioxide and water. The cell captures some energy at each step, so it can make ATP as it goes.',
+  'Picture a six-car link of train cars splitting into two three-car trains. Glycolysis does that to glucose in the cytoplasm, with a net gain of two ATP and two NADH.',
+  'Pyruvate oxidation is a handoff station. Each pyruvate gives up one carbon as carbon dioxide and passes the remaining two carbons to the Krebs cycle as acetyl-CoA. The handoff also produces one NADH.',
+  'Think of the Krebs cycle as a circular conveyor. It takes two turns per glucose, releases carbon dioxide and loads most of the captured energy onto NADH and FADH₂.',
+  'Picture electrons passing down a relay line. The handoffs power proton pumps, and oxygen catches the electrons at the end to help form water.',
+  'ATP synthase works like a turbine in a dam. Protons flow downhill through it, and the spinning enzyme uses that energy to make ATP.',
+  'Think of cellular respiration as a four-station assembly line. Glycolysis splits glucose, pyruvate oxidation prepares the pieces, the Krebs cycle loads electron carriers, and the final stage uses them to make most of the ATP.',
+];
+
 function demoScript(slide: Slide, variant: Variant, depth: 1 | 2): RescueScript {
   const d = DEMO_SCRIPTS[slide.index];
   const lvl = variant.slangLevel;
   const outro = lvl === 'unhinged' ? ' Back to the slide, bestie.' : lvl === 'mild' ? ' Back to the slide.' : '';
+  const analogy = variant.humourStyle === 'analogies' ? DEMO_ANALOGIES[slide.index] : undefined;
   return {
     variant: { targetSeconds: variant.targetSeconds, slangLevel: lvl, humourStyle: variant.humourStyle },
-    hook: depth === 2 ? (lvl === 'plain' ? 'Once more, slower.' : 'Okay, one more time. Slower.') : d.hook[lvl],
-    script: (depth === 2 ? d.deeper[lvl] : d.body[lvl]) + outro,
+    hook: analogy ? 'Picture it this way.' : depth === 2 ? (lvl === 'plain' ? 'Once more, slower.' : 'Okay, one more time. Slower.') : d.hook[lvl],
+    script: (analogy ?? (depth === 2 ? d.deeper[lvl] : d.body[lvl])) + outro,
     keyTerms: d.keyTerms.map((term) => ({ term, brollPrompt: `${term}, bold cartoon, neon colours, portrait` })),
     quiz: d.quiz.slice(0, variant.quizCount),
     plainSummary: d.summary,

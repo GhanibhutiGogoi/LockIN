@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LockIN 视线规则演示</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./demo.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <a href="/">LockIN</a>
+      <h1>视线规则演示</h1>
+      <p>选择模拟输入，再推进时间。此页面使用合成输入。</p>
+    </header>
+
+    <section class="preview" aria-label="学习页状态预览">
+      <div class="status"><span id="indicator" aria-hidden="true"></span><span id="tracking" role="status">正在追踪</span></div>
+      <div class="timer"><output id="away-seconds" aria-label="有效离屏秒数" aria-live="off">0.0</output><span> / 30 秒</span></div>
+      <progress id="away-progress" value="0" max="30" aria-label="有效离屏时长"></progress>
+      <div id="rescue" hidden>
+        <p id="reason" role="status"></p>
+        <button id="return" type="button">返回课件</button>
+      </div>
+    </section>
+
+    <section class="controls" aria-label="模拟控制">
+      <fieldset>
+        <legend>模拟输入</legend>
+        <div class="buttons">
+          <button type="button" data-mode="screen" aria-pressed="true">看屏幕</button>
+          <button type="button" data-mode="away" aria-pressed="false">看向别处</button>
+          <button type="button" data-mode="unknown" aria-pressed="false">遮挡摄像头</button>
+          <button type="button" data-mode="window" aria-pressed="false">离开窗口</button>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>模拟时间 <output id="elapsed" aria-live="off">0.0 秒</output></legend>
+        <div class="buttons">
+          <button id="play" type="button" aria-pressed="false">实时运行</button>
+          <button type="button" data-advance="500">推进 0.5 秒</button>
+          <button type="button" data-advance="10000">推进 10 秒</button>
+          <button id="reset" type="button">重置</button>
+        </div>
+      </fieldset>
+    </section>
+
+    <section aria-labelledby="events-heading">
+      <h2 id="events-heading">干预记录</h2>
+      <p id="empty">当前还没有触发。</p>
+      <ol id="events"></ol>
+    </section>
+  </main>
+</body>
+</html>

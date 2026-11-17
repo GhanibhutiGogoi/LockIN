@@ -1,3 +1,5 @@
+import type { TrackerRuntimeDiagnostic } from '../../../gaze-demo/backend/static/gaze.js';
+
 /**
  * LockIn — shared data types.
  *
@@ -9,9 +11,9 @@
  * four teams to agree, because it breaks someone's adapter.
  */
 
-// ───────────────────────── Deck & slides (AI 分析 owns ingestion) ─────────────────────────
+// ───────────────────────── Deck & slides (Content analysis owns ingestion) ─────────────────────────
 
-export type SourceType = 'pdf' | 'pptx' | 'demo';
+export type SourceType = 'pdf' | 'pptx' | 'demo' | 'screen';
 
 export interface Slide {
   /** 0-based slide index. */
@@ -40,7 +42,7 @@ export interface Deck {
   pdfUrl?: string;
 }
 
-// ───────────────────────── Variants (個人化 AI picks, AI 分析 + 影片 produce) ─────────────────────────
+// ───────────────────────── Variants (Adaptive AI picks, Content analysis + Media produce) ─────────────────────────
 
 export type SlangLevel = 'plain' | 'mild' | 'unhinged';
 export type HumourStyle = 'memes' | 'analogies' | 'roasts';
@@ -63,7 +65,7 @@ export interface Variant {
   quizCount: 0 | 1 | 2;
 }
 
-// ───────────────────────── Script (AI 分析 output) ─────────────────────────
+// ───────────────────────── Script (Content analysis output) ─────────────────────────
 
 export interface QuizQuestion {
   question: string;
@@ -93,7 +95,7 @@ export interface RescueScript {
   sensitive?: boolean;
 }
 
-// ───────────────────────── Media (影片 output) ─────────────────────────
+// ───────────────────────── Media (Media output) ─────────────────────────
 
 export interface CaptionWord {
   word: string;
@@ -154,7 +156,7 @@ export interface RescuePack {
   modelVersions?: Record<string, string>;
 }
 
-// ───────────────────────── Attention (視線追蹤 output) ─────────────────────────
+// ───────────────────────── Attention (Gaze tracking output) ─────────────────────────
 
 /** Each signal normalised to 0–1. All optional: send what you have. */
 export interface FocusSignals {
@@ -168,6 +170,14 @@ export interface FocusSignals {
   facePresent?: number;
 }
 
+export interface GazeTracking {
+  state: 'screen' | 'candidate' | 'away' | 'recovering' | 'unknown';
+  awayMs: number;
+  thresholdMs: number;
+  reason?: string;
+  returnMs?: number;
+}
+
 export interface FocusSample {
   /** ms since epoch (Date.now()) */
   t: number;
@@ -176,6 +186,10 @@ export interface FocusSample {
   signals?: FocusSignals;
   /** 0–1. Frames below ~0.3 (glare, dim light) are ignored, not scored as drift. */
   confidence: number;
+  /** One fresh event after 30 seconds of valid, calibrated off-screen evidence. */
+  offscreenLapse?: boolean;
+  gazeTracking?: GazeTracking;
+  gazeDiagnostic?: TrackerRuntimeDiagnostic;
   /** Optional on-screen gaze point in viewport-normalised coords 0–1. */
   gazePoint?: { x: number; y: number };
 }
@@ -186,7 +200,7 @@ export interface CalibrationPoint {
   y: number;
 }
 
-// ───────────────────────── Session (UI owns; 個人化 AI consumes) ─────────────────────────
+// ───────────────────────── Session (UI owns; Adaptive AI consumes) ─────────────────────────
 
 export type FocusState =
   | 'idle'
@@ -200,7 +214,7 @@ export type FocusState =
 
 export type LapseTrigger = 'gaze' | 'window' | 'drowsy' | 'manual';
 
-/** Thresholds the state machine uses. 個人化 AI may return per-user overrides. */
+/** Thresholds the state machine uses. Adaptive AI may return per-user overrides. */
 export interface SessionConfig {
   enterFocused: number; // 65
   enterDrifting: number; // 45
@@ -245,6 +259,35 @@ export interface VariantChoice {
   action?: 'clip' | 'skip';
 }
 
+export type MemoryStyle = 'plain' | 'analogy' | 'humor';
+
+export interface MemoryTopic {
+  deckTitle: string;
+  slideTitle: string;
+  slideText: string;
+}
+
+export interface RelatedMemory {
+  rescueId: string;
+  deckTitle: string;
+  slideTitle: string;
+  style: MemoryStyle;
+  focusedShare: number;
+  similarity: number;
+}
+
+export interface MemoryDecision {
+  style: MemoryStyle;
+  reason: 'rotation' | 'observed_recovery' | 'settings' | 'unavailable';
+  evidenceCount: number;
+  eligibleByStyle: Partial<Record<MemoryStyle, number>>;
+  excluded: { skipped: number; noClip: number; insufficientRecovery: number };
+  minOutcomesPerStyle: number;
+  minRecoverySamples?: number;
+  semanticStatus?: 'embeddinggemma-2' | 'confirmed' | 'no_match' | 'no_topic' | 'no_candidates' | 'unavailable';
+  relatedMemories?: RelatedMemory[];
+}
+
 /** Everything the reward function needs. Logged ~60 s after the user returns. */
 export interface RescueOutcome {
   rescueId: string;
@@ -267,6 +310,14 @@ export interface RescueOutcome {
   timeToRefocusSec: number | null;
   /** Share of the 60 s after returning to the slide spent Focused (A_after). */
   attentionAfter: number | null;
+  memoryDecision?: MemoryDecision;
+  memoryEvidence?: {
+    source: 'live' | 'replay';
+    variant: Pick<Variant, 'slangLevel' | 'humourStyle'>;
+    topic?: MemoryTopic;
+    recoverySamples: number;
+    focusedShare: number | null;
+  };
 }
 
 export interface FocusLogEntry {
@@ -278,6 +329,7 @@ export interface FocusLogEntry {
 }
 
 export interface SessionLog {
+  gazeDiagnostics?: { samples: (TrackerRuntimeDiagnostic & { t: number })[]; droppedSamples: number };
   /** Simulated sessions are excluded from normal history. */
   attentionSource?: 'gaze' | 'simulated' | 'unavailable';
   activeSeconds?: number;

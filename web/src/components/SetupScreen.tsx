@@ -4,6 +4,7 @@ import { plainText } from '../lib/demoDeck';
 import { registry } from '../providers/registry';
 import { ensureAttention, ensureCamera, isRunning } from '../session/engine';
 import { actions, useDeck } from '../store';
+import { LocalCalibration } from './LocalCalibration';
 
 /**
  * Recalibration, reached from Settings: the provider's dots (five by default),
@@ -12,6 +13,12 @@ import { actions, useDeck } from '../store';
  * calibration is over once the reading baseline ends.
  */
 export function SetupScreen() {
+  const provider = registry.attention;
+  if (provider.calibrate) return <LocalCalibration provider={provider} />;
+  return <BaselineSetup />;
+}
+
+function BaselineSetup() {
   const [step, setStep] = useState<'calibrate' | 'baseline'>('calibrate');
   const [ready, setReady] = useState(false);
 

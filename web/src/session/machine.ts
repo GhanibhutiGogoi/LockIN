@@ -33,6 +33,9 @@ export interface MachineInput {
   eyesClosed: boolean;
   /** Note-taking grace is active: looking down does not count as drift. */
   noteTaking: boolean;
+  /** The local gaze tracker owns dwell timing and emits a single event per excursion. */
+  offscreenRule?: boolean;
+  offscreenLapse?: boolean;
 }
 
 export interface Machine {
@@ -165,11 +168,13 @@ export function step(
 
   const windowLapse = windowInactiveSince !== null && sec(now - windowInactiveSince) >= cfg.windowInactiveLapseSec;
   const drowsyLapse = eyesClosedSince !== null && sec(now - eyesClosedSince) >= cfg.eyesClosedLapseSec;
+  const offscreenLapse = input.offscreenRule && input.offscreenLapse && !input.noteTaking;
 
   switch (m.state) {
     case 'focused': {
       if (windowLapse) return { m: lapseOrSuppress(m, now, cfg, 'window', events), events };
       if (drowsyLapse) return { m: lapseOrSuppress(m, now, cfg, 'drowsy', events), events };
+      if (offscreenLapse) return { m: lapseOrSuppress(m, now, cfg, 'gaze', events), events };
       if (effective < cfg.enterDrifting) {
         m = go(m, 'drifting', now, events);
         events.push({ type: 'nudge' });
@@ -182,7 +187,8 @@ export function step(
       }
       if (windowLapse) return { m: lapseOrSuppress(m, now, cfg, 'window', events), events };
       if (drowsyLapse) return { m: lapseOrSuppress(m, now, cfg, 'drowsy', events), events };
-      if (sec(now - m.since) >= cfg.driftToLapseSec && effective < cfg.enterDrifting) {
+      if (offscreenLapse) return { m: lapseOrSuppress(m, now, cfg, 'gaze', events), events };
+      if (!input.offscreenRule && sec(now - m.since) >= cfg.driftToLapseSec && effective < cfg.enterDrifting) {
         // A suppressed lapse re-enters drifting with a fresh timer, so the glow keeps
         // pulsing but we don't spam suppression events every frame.
         const next = lapseOrSuppress(m, now, cfg, 'gaze', events);
@@ -207,7 +213,8 @@ export function step(
         events.push({ type: 'refocused', afterMs });
         return { m, events };
       }
-      if (sec(now - m.since) >= cfg.recoverTimeoutSec) {
+      const offscreenRecovery = input.offscreenRule && m.lastTrigger === 'gaze';
+      if (offscreenRecovery ? offscreenLapse : sec(now - m.since) >= cfg.recoverTimeoutSec) {
         if (m.rescuesInRow >= cfg.maxRescuesInRow) {
           events.push({ type: 'suggestBreak', reason: 'repeated' });
           return { m: go(m, 'break', now, events), events };

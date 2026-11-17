@@ -4,13 +4,13 @@ import { registry } from '../providers/registry';
 import { actions } from '../store';
 
 /** Bump when what is measured or kept changes: everyone sees the screen again. */
-export const CONSENT_VERSION = '2026-11-v2';
+export const CONSENT_VERSION = '2026-11-v7';
 
 /**
  * First-run consent, in plain language: what LockIn measures, what it keeps,
  * what it never keeps, and how to stop. Shown before the camera is asked for.
  */
-export function ConsentScreen() {
+export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }) {
   const usesCamera = registry.attention.needsCamera;
   const [notify, setNotify] = useState(false);
   const recaps = registry.canRecap();
@@ -32,7 +32,7 @@ export function ConsentScreen() {
           <div>
             <dt className="font-semibold">What LockIn measures</dt>
             <dd className="mt-1 text-graphite">
-              {usesCamera
+              {screenStudy ? 'LockIn reads visible text and checks it against your goal on this Mac. With the camera calibrated, LockIn also estimates whether you are looking at the display.' : usesCamera
                 ? 'About ten times a second, your webcam is used to estimate whether your eyes are on the slide. LockIn also notices when you switch to another tab or app.'
                 : registry.config.attention.mode === 'off'
                   ? 'Study time, slides visited, and whether this tab is active. Gaze tracking is not connected, so this session will not estimate your attention.'
@@ -41,16 +41,29 @@ export function ConsentScreen() {
           </div>
           <div>
             <dt className="font-semibold">What it keeps</dt>
-            <dd className="mt-1 text-graphite">Your uploaded PDFs and completed session reports are saved on this device. Focus measurements are included only when a tracker supplies them. Clearing this browser’s site data removes this library.</dd>
+            <dd className="mt-1 text-graphite">
+              {screenStudy
+                ? 'The visible text and activity labels are used for this session. The local memory bank can keep recap outcomes and a short text excerpt when enabled.'
+                : 'Your uploaded PDFs and completed reports are saved in this browser. Reports include focus measurements when available. The local memory bank can keep recap outcomes and a short text excerpt when enabled.'}
+            </dd>
           </div>
+          {registry.attention.calibrationModel && (
+            <div>
+              <dt className="font-semibold">Camera calibration</dt>
+              <dd className="mt-1 text-graphite">This Mac keeps a diagnostic file with calibration progress, sample counts and validation errors.</dd>
+            </div>
+          )}
           <div>
-            <dt className="font-semibold">AI features</dt>
-            <dd className="mt-1 text-graphite">{recaps ? 'When a manual or automatic recap starts, recap services receive that slide’s text to create narration and questions. Simply opening or paging through slides does not send their text. A connected personalization service may receive session measurements and quiz answers. This interface does not record camera video.' : 'AI recaps are not connected. You can read slides and save a session report without them. This interface does not record camera video.'}</dd>
+            <dt className="font-semibold">Frames and recap services</dt>
+            <dd className="mt-1 text-graphite">
+              Camera frames {screenStudy && 'and shared screen frames '}are processed on this computer and discarded.
+              {!screenStudy && recaps && ' When a recap starts, connected recap services receive the selected slide’s text and may receive a short study history summary. Paging through slides does not send their text. A connected personalization service may receive session measurements and quiz answers.'}
+            </dd>
           </div>
           <div>
             <dt className="font-semibold">You stay in control</dt>
             <dd className="mt-1 text-graphite">
-              Press <kbd>P</kbd> to pause the session. If the camera is in use, it turns off. Delete saved decks from your library and session history in Settings. You can stop whenever you like.
+              Press <kbd>P</kbd> to pause. If the camera is in use, it turns off. {screenStudy && 'Stop sharing in LockIn or your browser to release the screen. '}You can delete saved decks from your library and session history in Settings.
             </dd>
           </div>
         </dl>
@@ -60,7 +73,7 @@ export function ConsentScreen() {
             <input type="checkbox" className="mt-1 h-4 w-4" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
             <span>
               <span className="font-semibold">Call me back with a notification</span>
-              <span className="block text-graphite">If you switch away and drift, LockIn plays a short sound and sends a notification instead of starting the recap where you can't see it.</span>
+              <span className="block text-graphite">Receive a system notification if LockIn flags a distraction while you are outside the app.</span>
             </span>
           </label>
         )}
