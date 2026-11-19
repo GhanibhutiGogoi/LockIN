@@ -75,3 +75,37 @@ def test_failure_keeps_previous_index(settings, failure):
     assert index.read_text() == "[]"
     assert not list((store.root / "assets").iterdir())
     assert not list((store.root / "tmp").iterdir())
+
+
+def test_update_budgets_final_catalog_and_preserves_previous_until_publish(settings, monkeypatch):
+    from types import SimpleNamespace
+
+    store = Store(settings.data_dir)
+    template = catalog()[0]
+    monkeypatch.setitem(LIMITS, template.kind, 10)
+    content = b"oldclip"
+
+    def asset(data):
+        return template.model_copy(update={"sha256": hashlib.sha256(data).hexdigest(), "bytes": 7})
+
+    old, new = asset(content), asset(b"newclip")
+
+    def respond(req):
+        if content == b"newclip":
+            assert (store.root / "assets" / old.filename).read_bytes() == b"oldclip"
+            assert store.starter(template.kind)[0]["url"] == "assets/" + old.filename
+        return httpx.Response(200, content=content)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        install(store, [old], client)
+        content = b"newclip"
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                "lockin_media.library.shutil.disk_usage", lambda _: SimpleNamespace(free=6)
+            )
+            with pytest.raises(ValueError, match="7 free bytes"):
+                install(store, [new], client)
+        assert [p.name for p in (store.root / "assets").iterdir()] == [old.filename]
+        assert install(store, [new], client)["downloaded"] == 1
+        assert [p.name for p in (store.root / "assets").iterdir()] == [new.filename]
+        assert store.starter(template.kind)[0]["url"] == "assets/" + new.filename
