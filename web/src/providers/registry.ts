@@ -24,6 +24,8 @@ export interface ServiceConfig {
   url: string;
   /** False for a scripts-only gateway; PDFs still import in the browser. */
   deckImport?: boolean;
+  /** Local studio receives this voice API address per render. */
+  voiceUrl?: string;
 }
 export type IntegrationConfig = Record<ServiceTeam, ServiceConfig>;
 
@@ -139,11 +141,11 @@ class Registry {
   }
   get media(): MediaProvider {
     const c = this.config.media;
-    return (this.cache.media ??= withTrace('media', c.mode === 'http' ? new HttpMediaProvider(c.url) : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockMediaProvider() : new NoMediaProvider())) as MediaProvider;
+    return (this.cache.media ??= withTrace('media', c.mode === 'http' ? new HttpMediaProvider(c.url, c.voiceUrl) : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockMediaProvider() : new NoMediaProvider())) as MediaProvider;
   }
   get adaptive(): AdaptiveProvider {
     const c = this.config.adaptive;
-    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url) : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAdaptiveProvider() : new LocalAdaptiveProvider())) as AdaptiveProvider;
+    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url) : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAdaptiveProvider() : new LocalAdaptiveProvider(() => !!this.config.media.voiceUrl))) as AdaptiveProvider;
   }
 }
 

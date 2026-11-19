@@ -667,7 +667,7 @@ export function toggleWrongFact() {
     actions.toast('Flag taken back.');
   } else {
     registry.content.reportWrongFact?.(deckId, slideIndex, variant.id);
-    actions.toast('Flagged. This clip will be checked against the slide again.');
+    actions.toast(r.pack.media.videoUrl ? 'Flagged for review on this computer.' : 'Flagged. This clip will be checked against the slide again.');
   }
   useApp.setState({ rescue: { ...r, flagged: !r.flagged } });
 }

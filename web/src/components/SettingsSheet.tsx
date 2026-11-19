@@ -5,6 +5,7 @@ import { isRunning, pauseSession } from '../session/engine';
 import { configForSensitivity } from '../session/machine';
 import { actions, useApp, type Theme } from '../store';
 import { Icon } from './Icon';
+import { LocalRecaps } from './LocalRecaps';
 import { AIConnectionSettings } from './AIConnectionSettings';
 
 const SLANG_SAMPLE: Record<SlangLevel, string> = {
@@ -80,7 +81,11 @@ export function SettingsSheet() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          <AIConnectionSettings />
+          <LocalRecaps />
+          <details className="mb-8">
+            <summary className="cursor-pointer text-sm">Single-server AI connection</summary>
+            <AIConnectionSettings />
+          </details>
           <Group title="Clips">
             {!registry.canRecap() && <p className="text-[15px] text-graphite">AI recaps are unavailable on this installation. These preferences apply when they are connected.</p>}
             <Field label="How clips talk" htmlFor="slang">

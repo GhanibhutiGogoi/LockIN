@@ -23,7 +23,9 @@ export function savedAIConnection(): Partial<AIConnection> {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null') as AIConnection | null;
     if (!saved || !['off', 'http'].includes(saved.media?.mode) || !['local', 'http'].includes(saved.content?.mode)) return {};
     return {
-      media: { mode: saved.media.mode, url: saved.media.mode === 'http' ? normalizeApiUrl(saved.media.url) : '' },
+      media: { mode: saved.media.mode, url: saved.media.mode === 'http' ? normalizeApiUrl(saved.media.url) : '',
+        ...(saved.media.voiceUrl && saved.media.mode === 'http' ? { voiceUrl: normalizeApiUrl(saved.media.voiceUrl, 'http:') } : {}),
+      },
       content: {
         mode: saved.content.mode,
         url: saved.content.mode === 'http' ? normalizeApiUrl(saved.content.url) : '',

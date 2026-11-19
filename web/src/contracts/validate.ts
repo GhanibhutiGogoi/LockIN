@@ -116,7 +116,7 @@ export function checkChoice(c: Partial<VariantChoice>): Problems {
   const v = c.variant;
   need(p, !!v && isStr(v.id), 'choice.variant.id must be a string');
   if (v) {
-    need(p, [20, 40, 60].includes(v.targetSeconds as number), 'choice.variant.targetSeconds (target_seconds) must be 20, 40 or 60');
+    need(p, [20, 30, 40, 60].includes(v.targetSeconds as number), 'choice.variant.targetSeconds (target_seconds) must be 20, 30, 40 or 60');
     need(p, isNum(v.pacing) && v.pacing > 0, 'choice.variant.pacing must be a number > 0');
     need(p, [0, 1, 2].includes(v.quizCount as number), 'choice.variant.quizCount (quiz_count) must be 0, 1 or 2');
     need(p, isStr(v.voiceId) && isStr(v.gameplayType), 'choice.variant.voiceId / gameplayType must be strings');
