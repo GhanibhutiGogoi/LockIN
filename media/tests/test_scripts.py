@@ -1,4 +1,6 @@
+import json
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -50,3 +52,22 @@ def test_bad_model_name_cannot_start_a_download(tmp_path):
     )
     assert result.returncode == 2
     assert "lockin-media download" not in result.stdout
+
+
+def test_mock_compose_starts_without_library_download():
+    if (
+        not shutil.which("docker")
+        or subprocess.run(["docker", "compose", "version"], capture_output=True).returncode
+    ):
+        pytest.skip("Docker Compose is unavailable")
+    result = subprocess.run(
+        ["docker", "compose", "--profile", "mock", "config", "--format", "json"],
+        cwd=SCRIPTS.parent,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=20,
+    )
+    services = json.loads(result.stdout)["services"]
+    assert set(services) == {"mock"}
+    assert not services["mock"].get("depends_on")

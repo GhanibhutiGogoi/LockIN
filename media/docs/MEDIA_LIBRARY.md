@@ -1,11 +1,13 @@
 # Starter gameplay and music
 
-API setup (`media/scripts/setup.sh api` or `all`) and Docker Compose download the media to the service host. Learners stream the selected assets from the service. Git contains a [download manifest](../src/lockin_media/starter-library.json) with URLs, authors, reuse terms, sizes, durations and SHA-256 hashes.
+API setup (`media/scripts/setup.sh api` or `all`) and the real Docker Compose profile download the media to the service host. Learners stream the selected assets from the service. Git contains a [download manifest](../src/lockin_media/starter-library.json) with URLs, authors, reuse terms, sizes, durations and SHA-256 hashes.
 
 | Library | Files | Download and installed size | Limit |
 | --- | ---: | ---: | ---: |
 | Gameplay | 6 MP4s | 281,192,672 bytes | 1,000,000,000 bytes |
 | Music | 7 MP3s | 40,304,682 bytes | 200,000,000 bytes |
+
+The mock Compose API starts with the existing or empty catalog. To populate it separately, run `docker compose run --build --rm starter-library` from `media/`.
 
 ### Gameplay
 
@@ -34,4 +36,4 @@ Kevin MacLeod supplies the seven instrumentals under CC BY 4.0. The manifest inc
 
 `GET /library/gameplay` and `GET /library/music` return playable, service-relative URLs and credit fields. The existing narration mixer accepts one selected track through `LOCKIN_MUSIC_FILE`. Automatic soundtrack selection is a separate recap feature.
 
-Run `media/scripts/download-library.sh` again to repair an installation. Verified files are reused, including completed transfers from an interrupted install. The downloader checks the byte budgets before connecting and the expected size and hash before publishing each file. The API switches to the new index after all files verify. Media goes under `LOCKIN_DATA_DIR/assets`. Locally published library entries count toward the caps. On a network that requires a proxy, the downloader honors the standard `HTTPS_PROXY` and `NO_PROXY` environment variables.
+Run `media/scripts/download-library.sh` again to repair an installation. Verified files are reused, including completed transfers from an interrupted install. The downloader checks the byte budgets before connecting and the expected size and hash before publishing each file. The byte caps apply to the final library. An update also needs temporary disk space for incoming files while the previous catalog is still available. The API switches to the new index after all files verify. Media goes under `LOCKIN_DATA_DIR/assets`. Locally published library entries count toward the caps. On a network that requires a proxy, the downloader honors the standard `HTTPS_PROXY` and `NO_PROXY` environment variables.

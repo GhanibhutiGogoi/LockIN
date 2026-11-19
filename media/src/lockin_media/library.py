@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from importlib.resources import files
@@ -54,14 +55,14 @@ class Asset(BaseModel):
         return f"starter-{self.sha256}.{extension}"
 
 
+def _verified(path, asset):
+    return (
+        path.is_file() and path.stat().st_size == asset.bytes and file_digest(path) == asset.sha256
+    )
+
+
 def _download(client, asset, store):
     final = store.root / "assets" / asset.filename
-    if (
-        final.is_file()
-        and final.stat().st_size == asset.bytes
-        and file_digest(final) == asset.sha256
-    ):
-        return False
     errors = []
     for url in asset.urls:
         try:
@@ -84,7 +85,7 @@ def _download(client, asset, store):
                 if total != asset.bytes or sha.hexdigest() != asset.sha256:
                     raise ValueError("Size or SHA-256 mismatch")
                 os.replace(part, final)
-                return True
+                return
         except (httpx.HTTPError, ValueError) as err:
             errors.append(f"{url.host}: {err}")
     raise RuntimeError(f"Could not install {asset.title}: {' | '.join(errors)}")
@@ -94,31 +95,42 @@ def install(store, assets, client):
     if len({a.id for a in assets}) != len(assets) or len({a.sha256 for a in assets}) != len(assets):
         raise ValueError("Duplicate starter asset")
     directory = store.root / "assets"
-    totals = {kind: sum(a.bytes for a in assets if a.kind == kind) for kind in LIMITS}
+    starter_bytes = {kind: sum(a.bytes for a in assets if a.kind == kind) for kind in LIMITS}
     with FileLock(store.root / "locks" / "starter-library.lock"):
         # Include the operator's published library. Narration and model weights
         # live alongside the library but have their own storage lifecycle.
-        legacy = {"gameplay": 0, "music": 0}
-        for record in store.entries():
-            kind = "music" if record["category"] == "music" else "gameplay"
-            legacy[kind] += (directory / record["file"]).stat().st_size
+        totals = starter_bytes.copy()
         keep = {a.filename for a in assets}
+        operator_files = set()
+        for record in store.entries():
+            name = record["file"]
+            if name not in keep and name not in operator_files:
+                kind = "music" if record["category"] == "music" else "gameplay"
+                totals[kind] += (directory / name).stat().st_size
+            operator_files.add(name)
+        for kind, size in totals.items():
+            if size > LIMITS[kind]:
+                raise ValueError(f"{kind} library would exceed {LIMITS[kind]} bytes")
+
         index = store.root / INDEX
         published = {r["file"] for r in json.loads(index.read_text())} if index.exists() else set()
         obsolete = []
         for path in directory.glob("starter-*"):
-            if not re.fullmatch(r"starter-[a-f0-9]{64}\.(mp3|mp4)", path.name) or path.name in keep:
+            if not re.fullmatch(r"starter-[a-f0-9]{64}\.(mp3|mp4)", path.name):
+                continue
+            if path.name in keep or path.name in operator_files:
                 continue
             if path.name in published:
                 obsolete.append(path)
-                legacy["music" if path.suffix == ".mp3" else "gameplay"] += path.stat().st_size
             else:
                 path.unlink()
-        for kind, size in totals.items():
-            if size + legacy[kind] > LIMITS[kind]:
-                raise ValueError(f"{kind} library would exceed {LIMITS[kind]} bytes")
+
+        pending = [a for a in assets if not _verified(directory / a.filename, a)]
+        required = sum(a.bytes for a in pending)
+        if shutil.disk_usage(store.root / "tmp").free < required:
+            raise ValueError(f"Library update needs {required} free bytes to stage incoming files")
         with ThreadPoolExecutor(max_workers=4) as pool:
-            installed = sum(pool.map(lambda a: _download(client, a, store), assets))
+            list(pool.map(lambda a: _download(client, a, store), pending))
         records = [
             {
                 **a.model_dump(mode="json", exclude={"urls", "sha256"}, exclude_none=True),
@@ -129,7 +141,11 @@ def install(store, assets, client):
         write_json(store.root / INDEX, records)
         for path in obsolete:
             path.unlink()
-    return {"downloaded": installed, "verified": len(assets) - installed, "starter_bytes": totals}
+    return {
+        "downloaded": len(pending),
+        "verified": len(assets) - len(pending),
+        "starter_bytes": starter_bytes,
+    }
 
 
 def install_starter():

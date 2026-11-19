@@ -1,6 +1,6 @@
 services:
   starter-library:
-    profiles: [mock, real]
+    profiles: [real]
     build: {context: ., target: api}
     command: ["python", "-m", "lockin_media.library"]
     volumes: ["./data:/data"]
@@ -8,8 +8,6 @@ services:
   mock:
     profiles: [mock]
     build: {context: ., target: api}
-    depends_on:
-      starter-library: {condition: service_completed_successfully}
     environment: {LOCKIN_MODE: mock}
     ports: ["127.0.0.1:8011:8011"]
     volumes: ["./data:/data"]
