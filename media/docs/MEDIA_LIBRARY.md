@@ -4,14 +4,14 @@ API setup (`media/scripts/setup.sh api` or `all`) and Docker Compose download th
 
 | Library | Files | Download and installed size | Limit |
 | --- | ---: | ---: | ---: |
-| Gameplay | 6 MP4s | 250,620,851 bytes | 1,000,000,000 bytes |
+| Gameplay | 6 MP4s | 281,192,672 bytes | 1,000,000,000 bytes |
 | Music | 7 MP3s | 40,304,682 bytes | 200,000,000 bytes |
 
 ### Gameplay
 
 - Three portrait Minecraft parkour segments from two recordings. [Orbital – No Copyright Gameplay](https://youtu.be/BXUA2FncVPI) · [GameplaysForFree](https://youtu.be/XBIaqOm0RKQ)
 - One portrait GTA V stunt-driving segment. [Orbital – No Copyright Gameplay](https://youtu.be/weAUrmRLpnk)
-- One landscape Roblox recording, *Stonks Staircase*, by VisualPlugin. [Archive and CC BY 3.0 source](https://archive.org/details/youtube-WEFtlBYeO4A)
+- One landscape Roblox *Tower of Hell* obstacle-course recording by RODBlox. [Source and uploader CC0 designation](https://archive.org/details/roblox-tower-of-hell-pero-es-un-noob)
 - One vertical Subway Surfers run. The archive lists the recording under CC0 and credits “Subway Surfers.” [Source and uploader license](https://archive.org/details/subway-surfers-2024-gameplay-4-k-9x-16-no-copyright-1)
 
 The Minecraft and GTA files are portrait edits distributed by DocuForge under CC BY 3.0. The manifest credits the uploaders named in its per-clip records and links to the original videos. The licenses here describe the supplied recordings. [Pinned distribution](https://github.com/Prixeree/docuforge-assets/tree/af1ecb7a85c0b5d4dfd1af3ebe80bd75cca800b1) · [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)

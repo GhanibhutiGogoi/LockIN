@@ -101,27 +101,28 @@
     "distribution_source": "https://github.com/Prixeree/docuforge-assets/tree/af1ecb7a85c0b5d4dfd1af3ebe80bd75cca800b1"
   },
   {
-    "id": "roblox-stonks-staircase",
+    "id": "roblox-tower-of-hell",
     "kind": "gameplay",
     "category": "obby",
-    "title": "Roblox — Stonks Staircase",
-    "creator": "VisualPlugin",
-    "source": "https://archive.org/details/youtube-WEFtlBYeO4A",
-    "license": "CC BY 3.0",
-    "license_url": "https://creativecommons.org/licenses/by/3.0/",
+    "title": "Roblox — Tower of Hell obstacle course",
+    "creator": "RODBlox",
+    "source": "https://archive.org/details/roblox-tower-of-hell-pero-es-un-noob",
+    "license": "CC0 1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
     "urls": [
-      "https://archive.org/download/youtube-WEFtlBYeO4A/WEFtlBYeO4A.mp4",
-      "https://dn800309.us.archive.org/0/items/youtube-WEFtlBYeO4A/WEFtlBYeO4A.mp4"
+      "https://archive.org/download/roblox-tower-of-hell-pero-es-un-noob/ROBLOX%20TOWER%20OF%20HELL%20-%20Pero%20es%20un%20NOOB.mp4",
+      "https://dn801205.us.archive.org/0/items/roblox-tower-of-hell-pero-es-un-noob/ROBLOX%20TOWER%20OF%20HELL%20-%20Pero%20es%20un%20NOOB.mp4"
     ],
-    "bytes": 35434119,
-    "sha256": "7f334882fa28098e80740af122e6b3236142a53eeabd2f4fa4953c038153f046",
-    "duration_sec": 364.18,
+    "bytes": 66005940,
+    "sha256": "3b7315c42266ff01f1a3cfe93d3cc7d9d4365d60cbe6f9670e837b81de830c53",
+    "duration_sec": 320.13,
     "tags": [
       "roblox",
       "obby",
-      "staircase"
+      "tower-of-hell"
     ],
-    "energy": 0.75
+    "energy": 0.75,
+    "edition": "Creator-edited gameplay with occasional cutaways"
   },
   {
     "id": "subway-surfers-2024",
