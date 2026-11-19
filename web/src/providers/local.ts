@@ -31,12 +31,14 @@ export class NoMediaProvider implements MediaProvider {
 export class LocalAdaptiveProvider implements AdaptiveProvider {
   readonly name = 'Your settings';
   private settings?: UserSettings;
+  constructor(private readonly compiled = () => false) {}
   async getSessionConfig(_userId: string, settings: UserSettings) {
     this.settings = settings;
     return { ...configForSensitivity(settings.sensitivity), cooldownSec: settings.cooldownSec ?? 180 };
   }
   async chooseVariant() {
-    return { variant: { ...DEFAULT_VARIANT, slangLevel: this.settings?.slangLevel ?? 'plain' }, isHoldout: false };
+    const format = this.compiled() ? { targetSeconds: 30 as const, gameplayType: 'auto', id: '30s·memes·auto' } : {};
+    return { variant: { ...DEFAULT_VARIANT, ...format, slangLevel: this.settings?.slangLevel ?? 'plain' }, isHoldout: false };
   }
   async reportOutcome() {}
   async endSession(log: SessionLog) { return { score: scoreSession(log.samples, log.rescues) }; }

@@ -50,10 +50,13 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
   const assertCurrent = () => {
     if (owner !== cache || signal.aborted) throw new Error('The AI connection changed. Request this recap again.');
   };
-  const sk = scriptKey(deck.id, slideIndex, variant, depth);
+  const baseKey = scriptKey(deck.id, slideIndex, variant, depth);
+  const sk = mediaProvider.compiled ? JSON.stringify([baseKey, variant.pacing, variant.gameplayType]) : baseKey;
   const script = await cached(owner.scripts, sk, () => content.getScript({ deck, slide, variant, profileMemo, depth }, { signal }));
   assertCurrent();
-  const media = await cached(owner.medias, mediaKey(deck.id, slideIndex, variant, depth), () => mediaProvider.renderMedia({ deckId: deck.id, slideIndex, script, variant }, { signal }));
+  const audioKey = mediaKey(deck.id, slideIndex, variant, depth);
+  const key = mediaProvider.compiled ? JSON.stringify([audioKey, variant.gameplayType]) : audioKey;
+  const media = await cached(owner.medias, key, () => mediaProvider.renderMedia({ deckId: deck.id, slideIndex, script, variant }, { signal }));
   assertCurrent();
   // every knob that shaped this pack is in its keys, so labelling it with `variant` is accurate
   return { deckId: deck.id, slideIndex, variant, script, media };

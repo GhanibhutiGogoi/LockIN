@@ -1,5 +1,9 @@
 # LockIn media
 
+For the web app, use the **[local recap studio and narration API](docs/LOCAL_RECAPS.md)**. The workstation writes scripts, assembles videos and stores them. A separate CPU service runs Kokoro and aligns captions.
+
+## Single-server media service and model research
+
 Ghani's part: self-hosted narration, caption alignment, original gameplay clips
 and optional concept b-roll. The selected quality-first stack is **LTX-2.5 DFR**,
 **Fish Audio Drama 3**, and **Qwen3-ForcedAligner-0.6B** for timestamps.
@@ -8,7 +12,7 @@ See [the research and assumptions](docs/MODEL_SELECTION.md) and
 
 **Installation scripts and local/server walkthrough:**
 [Install and connect the AI service](docs/DEPLOYMENT.md).
-The web app now accepts the API address under **Settings → AI connection** in
+The web app now accepts the API address under **Settings → Single-server AI connection** in
 production as well as development; no UI rebuild is needed to change it.
 
 The service implements Ray's existing `MediaProvider`. The UI composites the
@@ -216,7 +220,7 @@ cd web  # from the repository root
 npm run build
 ```
 
-Enter `https://YOUR-DOMAIN/media-api/` in **Settings → AI connection**.
+Enter `https://YOUR-DOMAIN/media-api/` in **Settings → Single-server AI connection**.
 Build-time Vite variables remain optional deployment defaults; saved user
 connections override them. Returned `assets/...` URLs
 are deliberately relative, so the existing UI resolves them under that prefix.
