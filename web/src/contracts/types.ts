@@ -128,7 +128,15 @@ export interface RescueMedia {
   broll: BrollClip[];
 }
 
-export interface GameplayLoop {
+interface LibraryCredit {
+  title?: string;
+  creator?: string;
+  source?: string;
+  license?: string;
+  licenseUrl?: string;
+}
+
+export interface GameplayLoop extends LibraryCredit {
   id: string;
   type: string;
   /** 0–1 */
@@ -137,7 +145,7 @@ export interface GameplayLoop {
   url?: string;
 }
 
-export interface MusicBed {
+export interface MusicBed extends LibraryCredit {
   id: string;
   tempo: number;
   energy: number;

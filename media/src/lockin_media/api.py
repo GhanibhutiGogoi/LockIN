@@ -98,7 +98,7 @@ def create_app(settings: Settings | None = None, service: MediaService | None = 
 
     @app.get("/library/music")
     def music():
-        return []  # Optional operator-supplied music is mixed into audio_url.
+        return service.store.starter("music")
 
     @app.get("/voices")
     def voices():

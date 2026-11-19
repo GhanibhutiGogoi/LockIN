@@ -21,6 +21,8 @@ generated quality, GPU memory, inference latency and GPU Docker images remain
 unverified until hardware is available. Mock mode is explicitly identified in
 health responses and returned provenance; it never claims to be a model result.
 
+[Starter gameplay and music libraries](docs/MEDIA_LIBRARY.md) are downloaded by API setup or Compose.
+
 ## Run now, without a GPU
 
 Install Python 3.12, [uv](https://docs.astral.sh/uv/) and FFmpeg. On macOS,
@@ -29,6 +31,7 @@ Install Python 3.12, [uv](https://docs.astral.sh/uv/) and FFmpeg. On macOS,
 ```sh
 cd media
 uv sync --frozen --group dev
+bash scripts/download-library.sh
 cp .env.example .env
 uv run lockin-media doctor
 uv run lockin-media serve
@@ -152,7 +155,7 @@ not a measured minimum) and ample disk for model/runtime snapshots (plan 300 GB)
    The default output is 1280×1024, 121 frames at 24 fps. It starts as a roughly
    five-second DFR take, then loses half a second to a tail/head crossfade.
    Crossfading does not guarantee a perfect seam; watch several repetitions.
-   Only `publish-video` adds a reviewed candidate to `GET /library/gameplay`.
+   For locally generated clips, `publish-video` adds a reviewed candidate to `GET /library/gameplay`.
    Runner, parkour, kinetic-sand and marble presets are included. Generated
    video audio is omitted from the final gameplay asset; narration is separate.
 
@@ -276,7 +279,7 @@ implemented, and the UI plays no separate music endpoint.
 | `POST /media` | Current UI request → MP3, aligned words, duration and reviewed b-roll |
 | `GET /library/gameplay` | Published MP4 loops, category and energy |
 | `GET /voices` | `hype` / `chill` profiles |
-| `GET /library/music` | Empty; optional music is mixed into narration |
+| `GET /library/music` | Installed MP3 beds, BPM, tags, attribution and playable URLs |
 | `GET /assets/{file}` | Final media, HTTP Range support |
 | `GET /healthz` | API liveness and explicit mode |
 | `POST /scripts` | Optional proxy to the configured content-team API |

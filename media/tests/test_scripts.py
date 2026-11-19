@@ -11,6 +11,8 @@ SCRIPTS = Path(__file__).parents[1] / "scripts"
     "name,args,expected",
     [
         ("setup-system.sh", [], "ffmpeg"),
+        ("setup.sh", ["api"], "python -m lockin_media.library"),
+        ("download-library.sh", [], "python -m lockin_media.library"),
         ("setup.sh", ["all"], "setup-runtime video --execute"),
         ("download-models.sh", [], "download video"),
         ("download-models.sh", ["voice"], "download voice"),
