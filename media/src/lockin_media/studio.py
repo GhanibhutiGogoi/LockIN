@@ -3,7 +3,6 @@
 import base64
 import json
 import re
-import shutil
 import subprocess
 import tempfile
 from datetime import UTC, datetime
@@ -17,7 +16,7 @@ from filelock import FileLock, Timeout
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .compose_recap import compose
+from .compose_recap import check_ffmpeg, compose
 from .schemas import Caption, MediaRequest, Script
 from .script_writer import Question, ScriptRequest, Writer, write_script
 from .settings import Settings
@@ -111,8 +110,7 @@ def create_app():
                 raise ValueError(
                     "Install the local starter library with media/scripts/download-library.sh"
                 )
-            if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-                raise ValueError("Install FFmpeg and ffprobe on the workstation")
+            check_ffmpeg()
             ready = read_voice(req, "readyz")
             if (
                 ready.get("service") != "lockin-narration"

@@ -2,6 +2,7 @@
 
 import random
 import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -10,6 +11,35 @@ from .audio import duration
 from .storage import Store
 
 HEADER = Path(__file__).with_name("caption-style.ass").read_text()
+
+
+def check_ffmpeg():
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not shutil.which("ffprobe"):
+        raise ValueError("Install FFmpeg and ffprobe on the workstation")
+
+    missing = []
+    for option, kind, required in (
+        ("-filters", "filter", ("ass",)),
+        ("-encoders", "encoder", ("libx264", "aac")),
+    ):
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-hide_banner", option],
+                check=True,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=3,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            raise ValueError(f"Could not inspect FFmpeg {option} on the workstation") from e
+        # The second column is the registered name. Descriptions and similarly
+        # named alternatives such as libx264rgb cannot satisfy the renderer.
+        names = {parts[1] for line in result.stdout.splitlines() if len(parts := line.split()) >= 2}
+        missing.extend(f"{name} {kind}" for name in required if name not in names)
+    if missing:
+        raise ValueError("Install an FFmpeg build with the missing " + ", ".join(missing))
 
 
 def stamp(seconds):

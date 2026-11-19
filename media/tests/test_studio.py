@@ -2,6 +2,7 @@ import base64
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from lockin_media import studio
@@ -105,3 +106,48 @@ def test_token_writer_sends_current_slide_and_keeps_token_in_header(monkeypatch)
     assert args["headers"]["Authorization"] == "Bearer fixture"
     assert "fixture" not in str(args["json"])
     assert "Private future slide" not in str(args["json"])
+
+
+@pytest.mark.parametrize(
+    ("filters", "encoders", "missing"),
+    [
+        (
+            " ... subtitles V->V Uses libass",
+            " V....D libx264 H.264\n A..... aac AAC",
+            ["ass filter"],
+        ),
+        (
+            " ... ass V->V",
+            " V....D libx264rgb H.264\n A..... libfdk_aac AAC",
+            ["libx264 encoder", "aac encoder"],
+        ),
+        (" ... ass V->V", " V....D libx264 H.264\n A..... aac AAC", []),
+    ],
+)
+def test_connection_names_missing_ffmpeg_capabilities(
+    tmp_path, monkeypatch, filters, encoders, missing
+):
+    monkeypatch.setenv("LOCKIN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    ffmpeg = tmp_path / "ffmpeg"
+    ffmpeg.write_text(
+        '#!/bin/sh\ncase "$2" in\n'
+        f"-filters) echo '{filters}' ;;\n-encoders) echo '{encoders}' ;;\n*) exit 1 ;;\nesac\n"
+    )
+    ffmpeg.chmod(0o755)
+    (tmp_path / "ffprobe").symlink_to(ffmpeg)
+    monkeypatch.setattr(studio.Writer, "check", lambda self: None)
+    monkeypatch.setattr(studio.Store, "starter", lambda self, kind: [{"id": "fixture"}])
+
+    def ready(*_):
+        assert not missing, "An incompatible workstation should fail before calling the voice host"
+        return {"service": "lockin-narration", "api_version": 1, "ready": True}
+
+    monkeypatch.setattr(studio, "read_voice", ready)
+    with TestClient(studio.create_app(), base_url="http://127.0.0.1") as client:
+        result = client.post("/connection", json={"voice_url": "https://voice.example/"})
+        if missing:
+            assert result.status_code == 422
+            assert all(item in result.json()["detail"] for item in missing)
+        else:
+            assert result.status_code == 200
