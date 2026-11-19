@@ -54,6 +54,17 @@ class Store:
                 entries.append(entry)
         return entries
 
+    def starter(self, kind: str) -> list[dict]:
+        index = self.root / "installed-starter.json"
+        if not index.exists():
+            return []
+        result = []
+        for entry in json.loads(index.read_text()):
+            if entry["kind"] == kind and (self.root / "assets" / entry["file"]).is_file():
+                meta = {k: v for k, v in entry.items() if k not in {"file", "kind", "category"}}
+                result.append({**meta, "type": entry["category"], "url": f"assets/{entry['file']}"})
+        return result
+
     def gameplay(self) -> list[dict]:
         return [
             {
@@ -63,5 +74,5 @@ class Store:
                 "url": f"assets/{e['file']}",
             }
             for e in self.entries()
-            if e["category"] != "broll"
-        ]
+            if e["category"] not in {"broll", "music"}
+        ] + self.starter("gameplay")

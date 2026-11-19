@@ -11,7 +11,7 @@ class WireModel(BaseModel):
 
 class Variant(WireModel):
     id: str = Field(default="default", max_length=200)
-    target_seconds: Literal[20, 40, 60] = 20
+    target_seconds: Literal[20, 30, 40, 60] = 20
     slang_level: Literal["plain", "mild", "unhinged"] = "mild"
     humour_style: Literal["memes", "analogies", "roasts"] = "memes"
     voice_id: Literal["hype", "chill"] = "hype"
