@@ -132,8 +132,13 @@ def test_connection_names_missing_ffmpeg_capabilities(
     from lockin_media import compose_recap
 
     monkeypatch.setattr(compose_recap.shutil, "which", lambda name: name)
-    monkeypatch.setattr(compose_recap.subprocess, "run", lambda args, **kwargs:
-                        SimpleNamespace(stdout=filters if args[-1] == "-filters" else encoders))
+    monkeypatch.setattr(
+        compose_recap.subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(
+            stdout=filters if args[-1] == "-filters" else encoders
+        ),
+    )
     monkeypatch.setattr(studio.Writer, "check", lambda self: None)
     monkeypatch.setattr(studio.Store, "starter", lambda self, kind: [{"id": "fixture"}])
 
@@ -161,20 +166,28 @@ def test_studio_accepts_windows_gaze_origin(tmp_path, monkeypatch):
 
 def test_cli_writer_uses_utf8_for_chinese_source_and_output(monkeypatch):
     from pathlib import Path
+
     from lockin_media import script_writer
 
     monkeypatch.setattr(script_writer.Writer, "check", lambda self: None)
-    draft = {"hook": "A surprise!", "script": "The median splits the data.",
-             "plain_summary": "中位数", "quiz": []}
+    draft = {
+        "hook": "A surprise!",
+        "script": "The median splits the data.",
+        "plain_summary": "中位数",
+        "quiz": [],
+    }
 
     def run(command, **kwargs):
         assert kwargs["encoding"] == "utf-8"
         assert "数据" in kwargs["input"]
-        (Path(kwargs["cwd"]) / "result.txt").write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+        (Path(kwargs["cwd"]) / "result.txt").write_text(
+            json.dumps(draft, ensure_ascii=False), encoding="utf-8"
+        )
         return SimpleNamespace(stdout="")
 
     monkeypatch.setattr(script_writer.subprocess, "run", run)
-    req = script_writer.ScriptRequest.model_validate({
-        "slide": {"text": "数据中的中位数", "title": "Data"}, "variant": {"quiz_count": 0}})
+    req = script_writer.ScriptRequest.model_validate(
+        {"slide": {"text": "数据中的中位数", "title": "Data"}, "variant": {"quiz_count": 0}}
+    )
     result = script_writer.write_script(script_writer.Writer(provider="codex"), req, {})
     assert result["plain_summary"] == "中位数"
