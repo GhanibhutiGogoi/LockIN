@@ -3,6 +3,8 @@
  * flows from the review of PR #3. Runs in node with a minimal DOM stand-in.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FocusSample } from '../contracts/types';
+import { ATTENTION_TIMING, ATTENTION_RULE_VERSION } from '../../../gaze-demo/backend/static/attention-policy.js';
 
 const h = vi.hoisted(() => {
   const listeners = new Map<string, Set<() => void>>();
@@ -103,6 +105,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   if (engine.isRunning()) await engine.endSession();
+  Reflect.deleteProperty(registry.attention, 'usesOffscreenRule');
+  Reflect.deleteProperty(registry.attention, 'suspend');
+  Reflect.deleteProperty(registry.attention, 'needsCalibration');
   vi.useRealTimers();
 });
 
@@ -185,6 +190,31 @@ describe('session lifecycle', () => {
     expect(registry.adaptive.endSession).not.toHaveBeenCalled();
   });
 
+  it('releases the camera on pause and reopens a retained provider for setup', async () => {
+    const suspend = vi.fn(() => true);
+    Object.assign(registry.attention, { suspend });
+    await engine.enterStudy();
+    await engine.togglePause();
+    expect(suspend).toHaveBeenCalledOnce();
+    expect(registry.attention.stop).not.toHaveBeenCalled();
+    expect(camera.releaseCamera).toHaveBeenCalled();
+    expect(store.useApp.getState().camera).toBe('paused');
+
+    Object.assign(registry.attention, { needsCalibration: true });
+    await Promise.all([engine.togglePause(), engine.togglePause()]);
+    expect(store.useApp.getState().screen).toBe('setup');
+    await engine.ensureCamera();
+    await engine.ensureAttention();
+    expect(registry.attention.start).toHaveBeenCalledTimes(2);
+    expect(registry.attention.stop).not.toHaveBeenCalled();
+
+    Object.assign(registry.attention, { needsCalibration: false });
+    await engine.enterStudy();
+    expect(store.useApp.getState().live.state).toBe('focused');
+    await engine.endSession();
+    expect(registry.attention.stop).toHaveBeenCalledOnce();
+  });
+
   it('keeps nudge-only when the personal-AI service is down', async () => {
     vi.mocked(registry.adaptive.getSessionConfig).mockRejectedValueOnce(new Error('down'));
     store.useApp.setState({ settings: { ...store.useApp.getState().settings, nudgeOnly: true } });
@@ -192,6 +222,75 @@ describe('session lifecycle', () => {
     await lapseByAppSwitch();
     expect(store.useApp.getState().rescue).toBeNull();
     expect(registry.adaptive.chooseVariant).not.toHaveBeenCalled();
+  });
+});
+
+describe('local gaze diagnostics', () => {
+  it('logs sustained eye closure as non-focus without invoking the legacy three-second drowsy rescue', async () => {
+    Object.assign(registry.attention, { usesOffscreenRule: true });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    for (let i = 0; i < 60; i++) {
+      emit({ t: Date.now(), score: 0, confidence: 1, signals: { gaze: 0, eyesOpen: 0, facePresent: 1 }, gazeTracking: { state: 'candidate', awayMs: i * 100, thresholdMs: 30000, reason: 'eyes_closed' } });
+      await advance(100);
+    }
+    expect(store.useApp.getState().live.state).toBe('drifting');
+    expect(store.useApp.getState().rescue).toBeNull();
+    await engine.endSession();
+    expect(store.useApp.getState().report!.log.samples.slice(-3).every(s => s.score === 0)).toBe(true);
+  });
+
+  it('exports numeric runtime diagnostics including unknown frames without sending them to the adaptive service', async () => {
+    Object.assign(registry.attention, { usesOffscreenRule: true });
+    let uploadedDiagnostics: unknown = 'not called';
+    vi.mocked(registry.adaptive.endSession).mockImplementationOnce(async log => {
+      uploadedDiagnostics = log.gazeDiagnostics;
+      return { score: { sustainedEpisodeMedianSec: 0 } } as never;
+    });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    emit({
+      t: Date.now(), score: 0, confidence: 0,
+      gazeTracking: { state: 'unknown', awayMs: 0, thresholdMs: 30000 },
+      gazeDiagnostic: { model: 'blazegaze', ruleVersion: ATTENTION_RULE_VERSION, timing: ATTENTION_TIMING, capturedAt: 1000, reason: 'eyes_unavailable', rawOutside: null, confirmedOutside: null, face: true, eyesOpen: false, eyeAspect: [.1, .3], head: [0, 0, 1], features: null, mappedGaze: null, phase: 'idle', awayMs: 0, returnMs: 0, lastReset: null },
+    });
+    await advance(2500);
+    await engine.endSession();
+    const log = store.useApp.getState().report!.log;
+    expect(log.samples).toEqual([]);
+    expect(log.gazeDiagnostics!.samples.some(s => s.reason === 'eyes_unavailable')).toBe(true);
+    expect(log.gazeDiagnostics!.samples.at(-1)?.reason).toBe('stale_frame');
+    expect(uploadedDiagnostics).toBeUndefined();
+  });
+
+  it('shows only new source observations and clears stalled evidence', async () => {
+    Object.assign(registry.attention, { usesOffscreenRule: true });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    const t = Date.now();
+    const sample: FocusSample = {
+      t, score: 0, confidence: 1, gazeTracking: { state: 'candidate', awayMs: 11_900, thresholdMs: 30_000 },
+    };
+    emit(sample);
+    await advance(100);
+    expect(store.useApp.getState().live.gazeTracking).toEqual(sample.gazeTracking);
+    emit({ ...sample, gazeTracking: { ...sample.gazeTracking!, awayMs: 29_900 } });
+    await advance(100);
+    expect(store.useApp.getState().live.gazeTracking?.awayMs).toBe(11_900);
+    emit({ ...sample, t: Date.now(), confidence: 0, gazeTracking: { ...sample.gazeTracking!, state: 'unknown' } });
+    await advance(100);
+    expect(store.useApp.getState().live.gazeTracking).toMatchObject({ state: 'unknown', awayMs: 11_900 });
+    await advance(1200);
+    expect(store.useApp.getState().live.gazeTracking).toMatchObject({ state: 'unknown', awayMs: 0 });
+  });
+
+  it('records the qualified gaze reason on the actual rescue', async () => {
+    Object.assign(registry.attention, { usesOffscreenRule: true });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    emit({ t: Date.now(), score: 0, confidence: 1, offscreenLapse: true });
+    await advance(200);
+    expect(store.useApp.getState().rescue).toMatchObject({ trigger: 'gaze', offscreen: true });
   });
 });
 

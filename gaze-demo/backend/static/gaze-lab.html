@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LockIN · 眼动测试</title><link rel="stylesheet" href="/debug-static/gaze-lab.css">
+</head>
+<body>
+  <header><a class="brand" href="/gaze-debug">LOCKIN <span>/ GAZE LAB</span></a><a href="/debug">完整模块调试 ↗</a></header>
+  <main>
+    <div class="intro"><span class="eyebrow">先验证眼动，再判断分心</span><h1>眼睛看哪，蓝点就跟到哪？</h1><p>先用这一个页面测试摄像头、校准和跟踪效果。不需要创建用户，也不需要共享屏幕。</p></div>
+    <ol class="steps" aria-label="测试步骤"><li><b>1</b><span>打开摄像头<small>正对镜头，光线均匀</small></span></li><li><b>2</b><span>跟随圆点校准<small>9 个校准点 + 3 个验证点</small></span></li><li><b>3</b><span>观察蓝点<small>看三个区域，检查跟随与偏移</small></span></li></ol>
+    <div class="workspace">
+      <section class="camera-card" aria-labelledby="camera-title"><div class="card-label"><h2 id="camera-title">摄像头</h2><span id="camera-badge" class="badge">未启动</span></div>
+        <div class="preview"><video id="camera" playsinline muted aria-label="本地摄像头预览"></video><p id="camera-placeholder">点击下方按钮后<br>浏览器才会请求摄像头权限</p></div>
+        <div class="actions"><button class="primary" id="start-camera">打开摄像头</button><button id="stop-camera" disabled>停止</button></div>
+        <p id="camera-message" role="status">画面仅在本机处理，不上传。</p>
+      </section>
+      <section class="tracking-card" aria-labelledby="tracking-title"><span class="eyebrow">实时状态</span><h2 id="tracking-title">还没开始</h2><p id="tracking-help">先打开摄像头，等模型识别到清晰的人脸和眼睛。</p>
+        <div class="actions"><button class="primary" id="start-calibration" disabled>开始校准</button><label class="check"><input type="checkbox" id="show-dot" checked>显示估计点</label><button id="preview-unvalidated" hidden>预览估计点（仅诊断）</button></div>
+        <p id="diagnostic-note" hidden role="status">黄色点仅用于诊断：校准精度未达标，不进入分心判断。</p>
+        <div class="signal"><span>跟踪信号</span><strong id="signal-status">等待启动</strong><span>校准状态</span><strong id="calibration-status">尚未校准</strong></div>
+        <p class="hint">坐稳，尽量只移动眼睛。校准时不需要点击圆点；完成采样后会自动移动。窗口大小或浏览器缩放改变后需要重新校准。</p>
+      </section>
+    </div>
+    <section aria-labelledby="offscreen-title"><div class="card-label"><h2 id="offscreen-title">离屏30秒规则 · 等待校准</h2><span class="badge">连续有效离屏 30 秒</span></div>
+      <p id="offscreen-help">校准通过后启用。根据头部和眼部参考范围估计离屏，不用蓝点是否越界作判断。</p>
+      <p class="hint">首次测试请把浏览器窗口尽量铺满屏幕，并保持页面在前台。让摄像头仍能看到脸和眼睛；如果侧脸识别失败，会显示无法判断。</p>
+      <div class="away-meter"><strong id="offscreen-timer">0.0 / 30.0 秒</strong><progress id="offscreen-progress" value="0" max="30" aria-label="有效离屏计时"></progress></div>
+      <p class="hint">短暂眨眼暂停计时；较长遮挡、断流或不可靠的数据会清除未完成计时。看回屏幕后重新计时。同一轮离屏只触发一次。</p>
+      <ul id="offscreen-events"></ul><p class="hint">这里记录规则触发结果。完整的本地视频与记忆流程可在「完整模块调试」中检查。规则准确率仍需真人试用验证。</p>
+    </section>
+    <section id="validation-result" hidden aria-labelledby="validation-title"><div class="card-label"><h2 id="validation-title">独立验证结果</h2><span id="validation-badge" class="badge"></span></div>
+      <p id="validation-copy"></p><div class="metrics"><div><span>平均偏差</span><strong id="mean-error">—</strong></div><div><span>最大偏差</span><strong id="max-error">—</strong></div><div><span>验证位置</span><strong>3 个新位置</strong></div></div>
+      <p class="hint">偏差是模型估计点与目标点的距离，单位为页面像素。当前通过标准只用于粗粒度跟踪，不代表能精确识别正在看哪行文字。</p>
+      <button id="export-report" disabled>保存这次校准结果（不含照片）</button>
+      <details><summary>查看各点偏移与模型信息</summary><ul id="point-errors"></ul><p>MediaPipe 定位人脸和眼部；WebEyeTrack 的预训练 BlazeGaze 估计注视坐标。个人校准拟合坐标映射，不重新训练模型。当前标准：三个点各自的归一化二维距离均小于 0.22；该阈值仍待真人验证。</p><p id="model-message"></p></details>
+    </section>
+    <section class="practice"><div class="card-label"><h2>校准后，试着看这三个区域</h2><span class="hint">蓝点是估计位置，允许有偏移</span></div><div class="practice-targets"><div><b>01</b><h3>看这里</h3><p>先看左边的文字。</p></div><div><b>02</b><h3>再看这里</h3><p>慢慢把视线移到中间。</p></div><div><b>03</b><h3>最后看这里</h3><p>观察蓝点是否跟到右边。</p></div></div><p class="hint">再试一次：短暂遮住摄像头，蓝点应该消失；移开遮挡后应恢复。如果蓝点一直偏向同一侧、明显反向或剧烈跳动，下载报告并告诉我现象。</p></section>
+    <p class="next-note">离屏超时是一条行为规则。仍看着屏幕时是否在刷无关娱乐内容，需要结合共享屏幕判断。</p>
+  </main>
+  <div id="gaze-dot" hidden aria-hidden="true"></div>
+  <div id="calibration" hidden role="dialog" aria-modal="true" aria-labelledby="cal-title"><div class="cal-copy"><span class="eyebrow">保持自然坐姿 · 不用点击</span><h2 id="cal-title">看着圆点，等它自动移动</h2><p id="cal-status">等待采样…</p><p class="hint">共 9 个校准点，随后自动验证 3 个新位置。通常约 30–60 秒，速度取决于电脑。</p><button id="cancel-cal">取消校准（Esc）</button></div><div id="target"></div></div>
+  <script type="module" src="/debug-static/gaze-lab.js"></script>
+</body></html>

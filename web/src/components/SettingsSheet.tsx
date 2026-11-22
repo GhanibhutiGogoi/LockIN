@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { SlangLevel } from '../contracts/types';
 import { registry, useIntegrationConfig } from '../providers/registry';
 import { isRunning, pauseSession } from '../session/engine';
+import { clearPacks } from '../session/packs';
 import { configForSensitivity } from '../session/machine';
 import { actions, useApp, type Theme } from '../store';
+import { CONSENT_VERSION } from './ConsentScreen';
 import { Icon } from './Icon';
 import { LocalRecaps } from './LocalRecaps';
 import { AIConnectionSettings } from './AIConnectionSettings';
@@ -168,6 +170,10 @@ export function SettingsSheet() {
                   if (isRunning()) await pauseSession();
                   actions.setCalibrated(false);
                   close();
+                  if (registry.attention.calibrate && useApp.getState().consent !== CONSENT_VERSION) {
+                    actions.go('study');
+                    return;
+                  }
                   actions.go('setup');
                 }}
               >
@@ -180,18 +186,26 @@ export function SettingsSheet() {
                 aria-live="polite"
                 onClick={async () => {
                   if (clear === 'idle') return setClear('confirm');
-                  setDeleting(true); setDeleteError(null);
-                  try { await actions.clearHistory(); setClear('done'); }
-                  catch { setDeleteError('History could not be deleted. Try again when browser storage is available.'); }
-                  finally { setDeleting(false); }
+                  setDeleting(true);
+                  setDeleteError(null);
+                  try {
+                    await actions.clearHistory();
+                    clearPacks();
+                    await registry.clearMemoryHistory();
+                    setClear('done');
+                  } catch {
+                    setDeleteError('Could not finish deleting history. Check browser storage and the local memory service, then try again.');
+                  } finally {
+                    setDeleting(false);
+                  }
                 }}
                 onBlur={() => clear === 'confirm' && setClear('idle')}
               >
                 <Icon name={clear === 'done' ? 'check' : 'trash'} size={16} />
-                {clear === 'done' ? 'Session history deleted' : clear === 'confirm' ? 'Press again to delete it for good' : 'Delete my session history'}
+                {clear === 'done' ? 'Session history deleted' : deleting ? 'Deleting history…' : clear === 'confirm' ? 'Press again to delete it for good' : 'Delete my session history'}
               </button>
               {deleteError && <p role="alert" className="text-[15px] text-lapse">{deleteError}</p>}
-              <p className="text-[15px] text-graphite">Saved PDFs and reports stay in this browser. History deletion removes local reports; it does not delete records held by connected services.</p>
+              <p className="text-[15px] text-graphite">Saved PDFs and reports stay in this browser. History deletion clears saved reports and the local memory bank. Manage records held by other services separately.</p>
             </div>
           </Group>
         </div>

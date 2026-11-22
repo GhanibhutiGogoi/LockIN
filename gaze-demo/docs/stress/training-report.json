@@ -1,0 +1,7 @@
+{
+  "status": "blocked_no_model_trained",
+  "reason": "No accessible compatible real-labelled input: see data-manifest.json; no model was trained.",
+  "runtime_eligible": false,
+  "real_training_completed": false,
+  "project_user_validation": false
+}

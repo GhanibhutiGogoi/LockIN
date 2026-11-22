@@ -1,0 +1,56 @@
+<!doctype html><html lang="zh-CN"><head><base href="/"><meta charset="utf-8"><title>LockIN attention integration checks</title></head><body>
+<h1>注意力闭环集成检查</h1><p>独立测试数据库、真实本地 MP4 播放事件、合成 gaze 时间序列。不会访问摄像头，不用于评估人的注意力准确率。</p>
+<button id="run">运行集成检查</button><video id="media" width="480" muted playsinline></video><pre id="log">等待运行</pre>
+<script type="module">
+import { StudyStore } from '/src/storage.ts';
+import { StudySession } from '/src/core/session.ts';
+import { memoryForGoal, makeGenerationRequest } from '/src/core/memory.ts';
+import { LocalVideoProvider, sampleAsset } from '/src/local-video.ts';
+const output=document.querySelector('#log'), video=document.querySelector('#media');
+const log=s=>output.textContent+='\n'+s;
+const assert=(v,s)=>{if(!v)throw new Error(s);log('PASS: '+s);};
+document.querySelector('#run').onclick=async()=>{
+ document.querySelector('#run').disabled=true;output.textContent='运行中…';
+ const dbName='lockin-integration-'+crypto.randomUUID(), store=new StudyStore(dbName);
+ try{
+  const a={id:'test-a',name:'测试 A',createdAt:new Date().toISOString(),preferences:{style:'plain',pace:'normal',language:'zh',maxSeconds:40}};
+  const b={...a,id:'test-b',name:'测试 B',preferences:{...a.preferences,style:'humor'}};
+  await store.saveProfile(a);await store.saveProfile(b);
+  const loaded=await store.profiles();assert(loaded.length===2&&loaded.find(p=>p.id==='test-b').preferences.style==='humor','IndexedDB 保存两位用户的独立偏好');
+  const asset=sampleAsset(), s=new StudySession({id:'integration-session',profileId:a.id,goal:asset.goal,studyContext:'分心前正在学习：平均值 = 总和 / 数量',startedAt:0,epoch:Date.now()});
+  const obs=(t,onScreen=true)=>({t,valid:true,onScreen,visible:true,screen:'study',source:'manual',gaze:[0,0],features:[0,0,0,0,0,0]});
+  for(let t=0;t<=2000;t+=500)s.observe(obs(t,false));
+  assert(s.active?.mode==='automatic'&&s.episodes.length===1,'持续屏外证据只触发一次干预');
+  const request=makeGenerationRequest(a,s.active,memoryForGoal(a.id,asset.goal,[]));
+  assert(request.studyContext.text.includes('分心前正在学习'),'请求保留分心前学习上下文');
+  const selected=await new LocalVideoProvider(()=>[asset]).prepare(request);s.videoReady(selected);
+  assert(s.active.playbackAt===null,'视频准备完成不等于已经播放');
+  let earlyRejected=false;try{s.answer(2500,1)}catch{earlyRejected=true}assert(earlyRejected,'视频未结束时禁止答题返回');
+  const wallStart=performance.now(), time=()=>3000+performance.now()-wallStart;
+  video.onplaying=()=>s.play(time());video.onpause=()=>s.pause(time());
+  const timer=setInterval(()=>s.observe(obs(time())),250);
+  try{
+   await new Promise((resolve,reject)=>{
+    const timeout=setTimeout(()=>reject(new Error('视频未按时结束')),30000);
+    video.onended=()=>{clearTimeout(timeout);s.endVideo(time());resolve()};
+    video.onerror=()=>{clearTimeout(timeout);reject(new Error('本地视频无法播放'))};
+    video.src=selected.url;video.play().catch(reject);
+   });
+  }finally{clearInterval(timer)}
+  assert(s.phase==='quiz'&&s.active.playbackAt!==null,'真实 MP4 ended 事件进入答题阶段');
+  const returnAt=time()+10;assert(s.answer(returnAt,1)===true,'正确答案完成返回条件');
+  for(let offset=0;offset<=120000;offset+=500)s.observe(obs(returnAt+offset));
+  const e=s.episodes[0];assert(e.summary.completed&&e.summary.coverage===1&&e.summary.recoveredAfterMs===4000,'完整恢复窗口得到覆盖率和持续恢复时间');
+  assert(e.summary.watchedMs>=11000&&e.summary.watchedMs<16000,'观看时长来自实际播放事件');
+  await store.saveEpisode(e);await store.saveSession(s.record);
+  assert((await store.episodes(b.id)).length===0,'其他用户看不到该干预记录');
+  let es=await store.episodes(a.id);assert(memoryForGoal(a.id,asset.goal,es).eligibleCount===1,'完整自动干预形成一条有效观察记忆');
+  const original=es[0].summary.onTaskMs;es[0].annotation.falseAlarm=true;await store.saveEpisode(es[0]);es=await store.episodes(a.id);
+  assert(memoryForGoal(a.id,asset.goal,es).eligibleCount===0&&es[0].summary.onTaskMs===original,'误报标注排除统计但保留原始测量');
+  const exported=JSON.parse(JSON.stringify({profile:a,episodes:es,sessions:await store.sessions(a.id),request}));
+  assert(exported.sessions[0].samples.length>100&&!('url' in exported.episodes[0].video),'可导出派生时间序列，记录不含媒体 URL 或摄像头图像');
+  log('ALL ATTENTION INTEGRATION CHECKS PASSED');
+ }catch(e){log('FAIL: '+(e.stack||e))}
+ finally{await store.close();indexedDB.deleteDatabase(dbName);document.querySelector('#run').disabled=false}
+};
+</script></body></html>

@@ -31,6 +31,19 @@ describe('metrics', () => {
     expect(score.quizAccuracy).toBeNull();
   });
 
+  it('reports the median rather than the longest observed focus stretch', () => {
+    const s = log([['focused', 120], ['drifting', 1], ['focused', 2], ['drifting', 1], ['focused', 2]]);
+    expect(focusedEpisodes(s)).toEqual([120, 2, 2]);
+    expect(scoreSession(s, []).sustainedEpisodeMedianSec).toBe(2);
+  });
+
+  it('does not count missing measurements as continuous focus', () => {
+    const s = log([['focused', 6]]).map((sample, i) => ({ ...sample, t: [0, 1, 60, 61, 120, 121][i] }));
+    expect(focusedEpisodes(s)).toEqual([2, 2, 2]);
+    expect(scoreSession(s, []).onTaskShare).toBe(1);
+    expect(scoreSession(s, []).sustainedEpisodeMedianSec).toBe(2);
+  });
+
   it('focus share window', () => {
     const s = log([['focused', 30], ['drifting', 30]]);
     expect(focusShare(s, 0, 60)).toBe(0.5);

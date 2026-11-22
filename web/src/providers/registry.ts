@@ -8,6 +8,7 @@ import { traced, type Team } from '../lib/devlog';
 import { load, save } from '../lib/storage';
 import { LocalAdaptiveProvider, LocalContentProvider, NoAttentionProvider, NoMediaProvider } from './local';
 import { HttpAdaptiveProvider, HttpContentProvider, HttpMediaProvider } from './http';
+import { MemoryAdaptiveProvider } from './memory/adaptive';
 import { MockAdaptiveProvider } from './mock/adaptive';
 import { MockAttentionProvider } from './mock/attention';
 import { MockContentProvider } from './mock/content';
@@ -33,7 +34,7 @@ export const TEAM_INFO: Record<ServiceTeam, { title: string; zh: string; owns: s
   attention: { title: 'Gaze tracking', zh: '視線追蹤', owns: 'Webcam → focus score 0–100, ~10 Hz', modes: ['off', 'ws', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
   content: { title: 'AI analysis', zh: 'AI 分析', owns: 'Deck parsing, script + quiz, fact-check', modes: ['local', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
   media: { title: 'Video', zh: '做影片', owns: 'Voice, word timings, b-roll, gameplay library', modes: ['off', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
-  adaptive: { title: 'Personal AI', zh: '個人化 AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['local', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+  adaptive: { title: 'Personal AI', zh: '個人化 AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['local', 'http', 'memory', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
 };
 
 const env = import.meta.env;
@@ -126,6 +127,10 @@ class Registry {
       && ['http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])].includes(this.config.media.mode);
   }
 
+  clearMemoryHistory() {
+    return new MemoryAdaptiveProvider().clearMemory();
+  }
+
   get attention(): AttentionProvider {
     const c = this.config.attention;
     return (this.cache.attention ??= (() => {
@@ -145,7 +150,10 @@ class Registry {
   }
   get adaptive(): AdaptiveProvider {
     const c = this.config.adaptive;
-    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url) : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAdaptiveProvider() : new LocalAdaptiveProvider(() => !!this.config.media.voiceUrl))) as AdaptiveProvider;
+    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url)
+      : c.mode === 'memory' ? new MemoryAdaptiveProvider()
+      : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAdaptiveProvider()
+      : new LocalAdaptiveProvider(() => this.media.compiled === true))) as AdaptiveProvider;
   }
 }
 

@@ -38,6 +38,22 @@ describe('session state machine', () => {
     expect(events.find((e) => e.type === 'lapse')).toMatchObject({ trigger: 'gaze', rescueInRow: 1 });
   });
 
+  it('takes only a qualified off-screen event from the calibrated gaze provider', () => {
+    const offscreen = { ...away, offscreenRule: true };
+    const { m, events } = run(started(), 0, 29_900, offscreen);
+    expect(events.some((e) => e.type === 'lapse')).toBe(false);
+
+    const suppressed = step(m, { ...offscreen, now: 30_000, offscreenLapse: true, noteTaking: true });
+    expect(suppressed.events.some((e) => e.type === 'lapse')).toBe(false);
+
+    const triggered = step(m, { ...offscreen, now: 30_000, offscreenLapse: true });
+    expect(triggered.events).toContainEqual({ type: 'lapse', trigger: 'gaze', rescueInRow: 1, depth: 1 });
+    const recovering = dispatch(triggered.m, { type: 'rescueFinished', clipMs: 5000 }, 35_000).m;
+    const sameExcursion = run(recovering, 35_100, 80_000, offscreen);
+    expect(sameExcursion.events.some((e) => e.type === 'lapse')).toBe(false);
+    expect(sameExcursion.m.state).toBe('recovering');
+  });
+
   it('returns to focused after 2 s above 65 while drifting', () => {
     let { m } = run(started(), 0, 2000, away);
     ({ m } = run(m, 2100, 3900, focused));
