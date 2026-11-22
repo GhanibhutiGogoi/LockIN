@@ -8,20 +8,29 @@ import type { GameplayLoop } from '../contracts/types';
 export function Gameplay({ loop, dim = false }: { loop?: GameplayLoop; dim?: boolean }) {
   if (loop?.url) {
     return (
-      <video
-        className="h-full w-full object-cover transition-[filter] duration-300"
-        style={{ filter: dim ? 'brightness(0.45) saturate(0.7)' : undefined }}
-        src={loop.url}
-        autoPlay
-        muted
-        loop
-        playsInline
-        // start at a random point so it never feels repeated
-        onLoadedMetadata={(e) => {
-          const v = e.currentTarget;
-          if (v.duration) v.currentTime = Math.random() * v.duration;
-        }}
-      />
+      <div className="relative h-full w-full">
+        <video
+          className="h-full w-full object-cover transition-[filter] duration-300"
+          style={{ filter: dim ? 'brightness(0.45) saturate(0.7)' : undefined }}
+          src={loop.url}
+          autoPlay
+          muted
+          loop
+          playsInline
+          // start at a random point so it never feels repeated
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget;
+            if (v.duration) v.currentTime = Math.random() * v.duration;
+          }}
+        />
+        {loop.creator && loop.source && loop.licenseUrl && (
+          <div className="absolute bottom-1 left-1 rounded bg-black/75 px-1.5 py-0.5 text-[11px] text-white">
+            <a href={loop.source} target="_blank" rel="noreferrer" title={loop.title}>{loop.creator}</a>
+            {' · '}
+            <a href={loop.licenseUrl} target="_blank" rel="noreferrer">{loop.license}</a>
+          </div>
+        )}
+      </div>
     );
   }
   return (import.meta.env.MODE === 'demo') ? <ProceduralLoop type={loop?.type ?? 'runner'} dim={dim} /> : null;

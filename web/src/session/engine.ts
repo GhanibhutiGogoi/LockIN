@@ -179,7 +179,8 @@ async function startSession() {
   const s = useApp.getState();
   const now = Date.now();
   const screenStudy = currentDeck().sourceType === 'screen';
-  const adaptive: AdaptiveProvider = screenStudy && registry.config?.adaptive.mode === 'http'
+  const adaptiveMode = registry.config?.adaptive.mode;
+  const adaptive: AdaptiveProvider = screenStudy && (adaptiveMode === 'http' || adaptiveMode === 'local')
     ? new LocalAdaptiveProvider()
     : registry.adaptive;
   const memorySource = adaptive.retrieveMemory
@@ -880,7 +881,7 @@ export function toggleWrongFact() {
     actions.toast('Flag taken back.');
   } else {
     registry.content.reportWrongFact?.(deckId, slideIndex, variant.id);
-    actions.toast('Flagged. This clip will be checked against the slide again.');
+    actions.toast(r.pack.media.videoUrl ? 'Flagged for review on this computer.' : 'Flagged. This clip will be checked against the slide again.');
   }
   useApp.setState({ rescue: { ...r, flagged: !r.flagged } });
 }

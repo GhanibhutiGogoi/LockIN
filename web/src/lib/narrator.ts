@@ -29,13 +29,13 @@ export interface PlaybackOptions {
   onPlaying?(): void;
 }
 
-export function narrate(media: RescueMedia, text: string, variant: Voice, muted: boolean, options: PlaybackOptions = {}): Narration {
-  if (media.audioUrl && !options.localOnly) return audioNarration(media, text, variant, muted, options);
+export function narrate(media: RescueMedia, text: string, variant: Voice, muted: boolean, options: PlaybackOptions = {}, player?: HTMLMediaElement): Narration {
+  if (!options.localOnly && (player || media.audioUrl)) return audioNarration(media, text, variant, muted, options, player);
   return speechNarration(media, text, variant, muted, options.localOnly);
 }
 
-function audioNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean, events: PlaybackOptions): Narration {
-  const audio = new Audio(media.audioUrl);
+function audioNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean, events: PlaybackOptions, player?: HTMLMediaElement): Narration {
+  const audio = player ?? new Audio(media.audioUrl);
   audio.preload = 'auto';
   audio.muted = muted;
   let resolve!: () => void;

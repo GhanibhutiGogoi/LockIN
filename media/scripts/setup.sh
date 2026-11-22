@@ -14,6 +14,9 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 run uv sync --frozen --no-dev --python 3.12
 if [[ ! -f .env ]]; then run cp .env.example .env; fi
+if [[ "$kind" == api || "$kind" == all ]]; then
+  run uv run --no-sync python -m lockin_media.library
+fi
 if [[ "$kind" == all ]]; then
   for runtime in voice video aligner; do run uv run --no-sync lockin-media setup-runtime "$runtime" --execute; done
 elif [[ "$kind" != api ]]; then

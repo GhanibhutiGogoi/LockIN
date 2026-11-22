@@ -5,9 +5,9 @@
  *
  * Two levels, because the knobs land in different places:
  *  - the script depends on length, slang, humour, recap/preview and quiz count;
- *  - the media (audio + caption timings) also bakes in the voice and pacing.
- * Only the gameplay loop is composed live in the player, so it is the one knob
- * left out of both keys.
+ *  - the media also depends on the voice and pacing.
+ * The local video studio selects gameplay and uses pacing when writing the
+ * script, so both settings belong in the script and media keys for that mode.
  */
 import { DEFAULT_VARIANT } from '../contracts/defaults';
 import type { Deck, RescueMedia, RescuePack, RescueScript, Variant } from '../contracts/types';
@@ -61,10 +61,13 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
   const assertCurrent = () => {
     if (owner !== cache || signal.aborted) throw new Error('The AI connection changed. Request this recap again.');
   };
-  const sk = scriptKey(deck.id, slideIndex, variant, depth, profileMemo);
+  const baseKey = scriptKey(deck.id, slideIndex, variant, depth, profileMemo);
+  const compiled = mediaProvider.compiled;
+  const sk = compiled ? JSON.stringify([baseKey, variant.pacing, variant.gameplayType]) : baseKey;
   const script = await cached(owner.scripts, sk, () => content.getScript({ deck, slide, variant, profileMemo, depth }, { signal }));
   assertCurrent();
-  const media = await cached(owner.medias, mediaKey(deck.id, slideIndex, variant, depth, profileMemo), () => mediaProvider.renderMedia({ deckId: deck.id, slideIndex, script, variant }, { signal }));
+  const key = compiled ? JSON.stringify([sk, variant.voiceId]) : mediaKey(deck.id, slideIndex, variant, depth, profileMemo);
+  const media = await cached(owner.medias, key, () => mediaProvider.renderMedia({ deckId: deck.id, slideIndex, script, variant }, { signal }));
   assertCurrent();
   // every knob that shaped this pack is in its keys, so labelling it with `variant` is accurate
   return { deckId: deck.id, slideIndex, variant, script, media };
