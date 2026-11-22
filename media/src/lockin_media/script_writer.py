@@ -154,11 +154,12 @@ def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
                 cwd=scratch,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 check=True,
                 timeout=180,
             )
             raw = (
-                (Path(scratch) / "result.txt").read_text()
+                (Path(scratch) / "result.txt").read_text(encoding="utf-8")
                 if writer.provider == "codex"
                 else result.stdout
             )

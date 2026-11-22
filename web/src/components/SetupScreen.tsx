@@ -5,6 +5,7 @@ import { registry } from '../providers/registry';
 import { ensureAttention, ensureCamera, isRunning } from '../session/engine';
 import { actions, useDeck } from '../store';
 import { LocalCalibration } from './LocalCalibration';
+import { GazeTraceSetup } from './GazeTraceSetup';
 
 /**
  * Recalibration, reached from Settings: the provider's dots (five by default),
@@ -14,6 +15,8 @@ import { LocalCalibration } from './LocalCalibration';
  */
 export function SetupScreen() {
   const provider = registry.attention;
+  const deck = useDeck();
+  if (provider.calibrate && deck.sourceType === 'screen') return <GazeTraceSetup><LocalCalibration provider={provider} screenStudy /></GazeTraceSetup>;
   if (provider.calibrate) return <LocalCalibration provider={provider} />;
   return <BaselineSetup />;
 }

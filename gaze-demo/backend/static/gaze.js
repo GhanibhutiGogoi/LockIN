@@ -1,6 +1,7 @@
 /** Adapter for the existing frozen pretrained worker. Raw frames never leave browser. */
 import {orderedScores} from './stress-contract.js';
 import {OffscreenMonitor} from './offscreen.js';
+import {readCalibrationGeometry, coversScreen, changedGeometry} from './calibration-geometry.js';
 
 const CALIBRATION_TARGETS=[[0,0],[-.42,-.4],[0,-.4],[.42,-.4],[.42,0],[.42,.4],[0,.4],[-.42,.4],[-.42,0]];
 const VALIDATION_TARGETS=[[-.23,-.19],[.24,.21],[-.18,.24]];
@@ -164,7 +165,10 @@ export class GazeCapture {
     const deviceId=this.stream?.getVideoTracks()[0]?.getSettings?.().deviceId;
     const {videoWidth,videoHeight}=this.video;
     if(!deviceId||!videoWidth||!videoHeight)return null;
-    return JSON.stringify([deviceId,videoWidth,videoHeight,innerWidth,innerHeight,globalThis.devicePixelRatio??1]);
+    const g=readCalibrationGeometry();
+    return JSON.stringify([deviceId,videoWidth,videoHeight,...(this.calibrationSpace==='screen'
+      ? [g.screenWidth,g.screenHeight,g.pixelRatio,g.screenLeft,g.screenTop]
+      : [g.width,g.height,g.pixelRatio])]);
   }
 
   suspend(){
@@ -201,6 +205,8 @@ export class GazeCapture {
 
   revalidate(){
     if(!this.canRecheck||!this.ready||!this.cameraLive())return false;
+    // Validation dots must occupy the original physical calibration area.
+    if(this.calibrationGeometry&&changedGeometry(this.calibrationGeometry,readCalibrationGeometry()).length)return false;
     this.canRecheck=false;
     this.quickDeadline=performance.now()+QUICK_CHECK_MS;
     this.calibrationIssue=null;
@@ -256,11 +262,20 @@ export class GazeCapture {
   interrupt(){this.latest=null;this.invalidatedAt=performance.now();this.offscreen.invalidate();this.invalidateExpression();if(this.phase!=='idle'){this.cancel();this.calibrationIssue='camera_interrupted';this.status('Camera interrupted. Calibration was cancelled. Restore the camera feed and retry.');}}
   fail(message,issue='worker_error'){this.ready=false;this.interrupt();this.cancel();this.ready=false;this.busy=false;this.workerStartedAt=null;this.inferenceStartedAt=null;this.worker?.terminate();this.calibrated=false;this.calibrationIssue=issue;this.status(message);}
   checkViewport(){
+    if(this.calibrationGeometry){
+      const current=readCalibrationGeometry();
+      const space=this.calibrated&&this.phase==='idle'?this.calibrationSpace:'viewport';
+      if(changedGeometry(this.calibrationGeometry,current,space).length&&(this.calibrated||this.phase!=='idle')){
+        this.cancel();this.calibrated=false;this.validationReport=null;this.calibrationIssue='viewport_changed';
+        this.status(space==='screen'?'Display or scale changed. Please recalibrate.':'Calibration area changed. Please recalibrate.');
+      }
+      return;
+    }
     if(this.size&&(this.calibrated||this.phase!=='idle')&&(this.size[0]!==innerWidth||this.size[1]!==innerHeight||(this.pixelRatio!==undefined&&this.pixelRatio!==(globalThis.devicePixelRatio??1)))){
       this.cancel();this.calibrated=false;this.validationReport=null;this.calibrationIssue='viewport_changed';this.status('Window size changed. Please recalibrate.');
     }
   }
-  calibrate() {if(!this.ready||!this.cameraLive())throw Error('Start the camera and wait for the model to load first.');this.cancel();this.calibrated=false;this.validationReport=null;this.calibrationIssue=null;this.fitDiagnostics=null;this.pointDiagnostics=[];this.validation=false;this.phase='points';this.index=0;this.errors=[];this.validationPoints=[];this.size=[innerWidth,innerHeight];this.pixelRatio=globalThis.devicePixelRatio??1;this.worker.postMessage({type:'reset',calibrationId:this.calibrationId});this.beginStage();}
+  calibrate({screen=false}={}) {if(!this.ready||!this.cameraLive())throw Error('Start the camera and wait for the model to load first.');this.cancel();this.calibrated=false;this.validationReport=null;this.calibrationIssue=null;this.fitDiagnostics=null;this.pointDiagnostics=[];this.validation=false;this.phase='points';this.index=0;this.errors=[];this.validationPoints=[];this.size=[innerWidth,innerHeight];this.pixelRatio=globalThis.devicePixelRatio??1;this.calibrationGeometry=readCalibrationGeometry();this.calibrationSpace=screen&&coversScreen(this.calibrationGeometry)?'screen':'viewport';this.worker.postMessage({type:'reset',calibrationId:this.calibrationId});this.beginStage();}
   beginStage(){
     if(!this.manualStages){this.place();return;}
     this.phase='awaiting-start';
@@ -404,6 +419,8 @@ export class GazeCapture {
     this.fitDiagnostics=null;
     this.calibrationKey=null;
     this.captureRounds=false;
+    this.calibrationGeometry=null;
+    this.calibrationSpace='viewport';
     this.resumedCapture=false;
     this.suspended=false;
   }

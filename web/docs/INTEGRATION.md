@@ -25,16 +25,14 @@ and advertises `deck_import: false`; it does not convert PPTX. Script routing
 discovery means the upstream is configured, not that inference has been tested.
 See the [local/server setup guide](../../media/docs/DEPLOYMENT.md).
 
-> **中文摘要**：UI 已經可以獨立跑（每一組都有 mock）。每組只要實作 `src/contracts/providers.ts` 裡屬於自己的那一個介面，
-> 或是照下面的 HTTP / WebSocket 格式開一個服務，然後在畫面右下角的 **Integrations**（或按 `` ` ``）把自己那組從 `mock` 切到 `http` / `ws`、
-> 填上網址、按 **Run contract check**。格式不對的話，面板會直接列出是哪個欄位錯。
+> **Integration summary:** Each team implements its interface in `src/contracts/providers.ts` or runs a service using the HTTP/WebSocket contracts below. In **Integrations** (shortcut: `` ` ``), select `http` or `ws`, enter the service URL, and click **Run contract check**. Validation errors identify the fields that need correction. Mock providers are available only in demo mode.
 
 | Team | Interface | How you connect | Default URL |
 |---|---|---|---|
-| 視線追蹤 Gaze tracking | `AttentionProvider` | WebSocket **or** in-browser plugin | `ws://localhost:8765` |
-| AI 分析 AI analysis | `ContentProvider` | HTTP | `http://localhost:8010` |
-| 做影片 Video | `MediaProvider` | HTTP | `http://localhost:8011` |
-| 個人化 AI Personal AI | `AdaptiveProvider` | HTTP | `http://localhost:8012` |
+| Gaze tracking | `AttentionProvider` | WebSocket **or** in-browser plugin | `ws://localhost:8765` |
+| AI analysis | `ContentProvider` | HTTP | `http://localhost:8010` |
+| Video | `MediaProvider` | HTTP | `http://localhost:8011` |
+| Personal AI | `AdaptiveProvider` | HTTP | `http://localhost:8012` |
 
 All shapes are defined once in [`src/contracts/types.ts`](../src/contracts/types.ts).
 That file is the source of truth; this page explains it.
@@ -80,7 +78,7 @@ Runnable stubs for every service are in [`examples/`](../examples). Start from t
 
 ---
 
-## 視線追蹤 · Gaze tracking → `AttentionProvider`
+## Gaze tracking → `AttentionProvider`
 
 **You produce:** a focus score from the camera only, ~10 times a second.
 The UI adds window focus, smooths over 1 s, and decides drifting / lapse.
@@ -159,7 +157,7 @@ Never upload or store frames.
 
 ---
 
-## AI 分析 · AI analysis → `ContentProvider`
+## AI analysis → `ContentProvider`
 
 **You produce:** slides from a file, and for each slide a brain-rot script + quiz,
 fact-checked against the slide.
@@ -235,7 +233,7 @@ Example: [`examples/services_stub.py`](../examples/services_stub.py) (content ro
 
 ---
 
-## 做影片 · Video → `MediaProvider`
+## Video → `MediaProvider`
 
 **You produce:** narration audio, word timings for captions, key-term b-roll,
 and the shared gameplay / music library. The UI **composes live**: it layers
@@ -300,7 +298,7 @@ Example: [`examples/services_stub.py`](../examples/services_stub.py) (media rout
 
 ---
 
-## 個人化 AI · Personal AI → `AdaptiveProvider`
+## Personal AI → `AdaptiveProvider`
 
 **You produce:** per-user timing, the style of each rescue, rewards, and the
 session review + profile memo.
@@ -314,7 +312,7 @@ session review + profile memo.
 | `GET /profile/{user_id}` | session start | → `{ "memo": "…" }` (fed to `/scripts`) |
 
 `RescueContext` (bandit features): `minutes_into_session, lapse_depth, slide_difficulty,
-trigger (gaze|window|drowsy), rescue_in_row, rescues_so_far, recent_variant_ids, hour_of_day, slide_index, deck_id, user_id`.
+trigger (gaze|window|drowsy|content), rescue_in_row, rescues_so_far, recent_variant_ids, hour_of_day, slide_index, deck_id, user_id`.
 
 `VariantChoice`: `{ "variant": Variant, "is_holdout": false, "is_explore": true, "action": "clip" | "skip" }`
 — `action: "skip"` runs the "no clip, plain reminder" control arm.

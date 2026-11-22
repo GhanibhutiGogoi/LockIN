@@ -10,6 +10,7 @@ export type ScreenReading = 'idle' | 'waiting' | 'reading' | 'ready' | 'no-text'
 export type Theme = 'system' | 'light' | 'dark';
 
 export interface Live {
+  recapPreparation?: 'preparing' | 'ready' | 'unavailable';
   attentionAvailable: boolean;
   state: FocusState;
   /** smoothed camera score, 0–100 */
@@ -76,6 +77,7 @@ export interface DeckSummary {
 }
 
 interface AppState {
+  finishingReport: boolean;
   userId: string;
   screen: Screen;
   theme: Theme;
@@ -89,6 +91,7 @@ interface AppState {
   deckId: string;
   slideIndex: number;
   screenReading: ScreenReading;
+  screenOcr: { status: string; message: string; engine?: string } | null;
   screenSeenAt: number | null;
   screenGoal: string;
   screenActivity: ActivityLabel | 'checking' | null;
@@ -132,6 +135,7 @@ export const emptyLive = (): Live => ({
 });
 
 export const useApp = create<AppState>(() => ({
+  finishingReport: false,
   userId,
   screen: 'desk',
   theme: load<Theme>('lockin.theme', 'system'),
@@ -145,6 +149,7 @@ export const useApp = create<AppState>(() => ({
   deckId: '',
   slideIndex: 0,
   screenReading: 'idle',
+  screenOcr: null,
   screenSeenAt: null,
   screenGoal: '',
   screenActivity: null,

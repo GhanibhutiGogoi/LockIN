@@ -77,7 +77,7 @@ export interface AttentionProvider {
   readonly needsCalibration?: boolean;
   readonly calibrationModel?: 'blazegaze' | 'eyetheia';
   calibrationDiagnostics?(): TrackerCalibrationDiagnostics | null;
-  prepareCalibration?(): void;
+  prepareCalibration?(options?: { screenStudy?: boolean }): void;
   startCalibrationStage?(): void;
   skipCalibration?(): void;
   /** The provider emits an event after its own dwell rule. */

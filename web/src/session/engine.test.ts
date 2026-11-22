@@ -108,6 +108,7 @@ afterEach(async () => {
   Reflect.deleteProperty(registry.attention, 'usesOffscreenRule');
   Reflect.deleteProperty(registry.attention, 'suspend');
   Reflect.deleteProperty(registry.attention, 'needsCalibration');
+  Reflect.deleteProperty(registry.adaptive, 'retrieveMemory');
   vi.useRealTimers();
 });
 
@@ -118,6 +119,143 @@ async function lapseByAppSwitch() {
 }
 
 describe('session lifecycle', () => {
+  it('keeps memory-based variant selection for screen preparation', async () => {
+    const share = await import('../lib/screenShare');
+    const { DEFAULT_VARIANT } = await import('../contracts/defaults');
+    const retrieveMemory = vi.fn(async () => ({ choice: { variant: DEFAULT_VARIANT, isHoldout: false }, memo: 'Use plain explanations.' }));
+    Object.assign(registry.adaptive, { retrieveMemory });
+    Object.assign(registry.attention, { usesOffscreenRule: true });
+    const deck = { id: 'screen-memory', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Outliers', text: 'Outliers are unusual observations.' }], slideCount: 1 };
+    store.actions.addDeck(deck); store.useApp.setState({ screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    for (let i = 0; i < 25; i++) {
+      emit({ t: Date.now(), score: 0, confidence: 1, gazeTracking: { state: 'away', awayMs: i * 200, thresholdMs: 30000 } });
+      await advance(200);
+    }
+    expect(retrieveMemory).toHaveBeenCalledWith(deck.id, 'live', expect.anything(), expect.objectContaining({ topic: expect.objectContaining({ slideText: deck.slides[0].text }) }));
+    expect(registry.content.getScript).toHaveBeenCalledWith(expect.objectContaining({ profileMemo: 'Use plain explanations.' }), expect.anything());
+  });
+
+  it('connects screen off-topic dwell to real providers, quiz, recovery and a timestamp-aligned report', async () => {
+    const share = await import('../lib/screenShare');
+    const deck = { id: 'screen-flow', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Data mining', text: 'Outliers are unusual observations.' }], slideCount: 1 };
+    store.actions.addDeck(deck);
+    store.useApp.setState({ screenGoal: 'Data mining', screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const timeline = share.getScreenTimeline()!;
+    const scene = timeline.observe(Date.now(), true, 1600, 900, 'monitor');
+    Object.assign(scene, { status: 'ready', label: 'off-topic', text: 'Sports highlights' });
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    for (let i = 0; i < 160; i++) {
+      scene.observedUntil = Date.now();
+      emit({ t: Date.now(), score: 100, confidence: 1, gazeTracking: { state: 'screen', awayMs: 0, thresholdMs: 30000 } });
+      await advance(200);
+      if (i === 25) {
+        expect(registry.media.renderMedia).toHaveBeenCalledTimes(1);
+        expect(store.useApp.getState().rescue).toBeNull();
+      }
+    }
+    expect(store.useApp.getState().rescue).toMatchObject({ phase: 'playing', trigger: 'content' });
+    expect(registry.content.getScript).toHaveBeenCalledWith(expect.objectContaining({ slide: deck.slides[0] }), expect.anything());
+    engine.clipEnded();
+    expect(store.useApp.getState().rescue?.phase).toBe('quiz');
+    engine.answerQuiz(0, 0); engine.finishRescue();
+    expect(store.useApp.getState().rescue).toBeNull();
+    expect(store.useApp.getState().live.state).toBe('recovering');
+    await engine.endSession();
+    const report = store.useApp.getState().report!;
+    expect(report.log.rescues[0].context.trigger).toBe('content');
+    expect(report.log.rescues[0].quiz[0].correct).toBe(true);
+    expect(report.log.screenAnalysis?.windows.some(w => w.offTopicMs > 0)).toBe(true);
+    expect(report.log.screenAnalysis?.events.map(e => e.type)).toEqual(expect.arrayContaining(['preparation-started', 'playback-started', 'quiz-started', 'returned-to-study']));
+  });
+
+  it('cancels screen preparation on recovery and never treats missing gaze as an automatic rescue', async () => {
+    const share = await import('../lib/screenShare');
+    const deck = { id: 'screen-cancel', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Topic', text: 'Study material.' }], slideCount: 1 };
+    store.actions.addDeck(deck); store.useApp.setState({ screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    for (let i = 0; i < 25; i++) {
+      emit({ t: Date.now(), score: 0, confidence: 1, gazeTracking: { state: 'away', awayMs: i * 200, thresholdMs: 30000 } });
+      await advance(200);
+    }
+    expect(store.useApp.getState().live.recapPreparation).toBe('ready');
+    vi.spyOn(share, 'hasStudyRecapContext').mockReturnValue(true);
+    for (let i = 0; i < 8; i++) {
+      emit({ t: Date.now(), score: 100, confidence: 1, gazeTracking: { state: 'screen', awayMs: 0, thresholdMs: 30000 } });
+      await advance(200);
+    }
+    expect(store.useApp.getState().live.recapPreparation).toBeUndefined();
+    await advance(35_000);
+    expect(store.useApp.getState().rescue).toBeNull();
+  });
+
+  it('plays delayed media after brief tracking loss while distraction continues', async () => {
+    const share = await import('../lib/screenShare');
+    const deck = { id: 'screen-delayed', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Outliers', text: 'Outliers are unusual observations.' }], slideCount: 1 };
+    store.actions.addDeck(deck); store.useApp.setState({ screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const media = { captions: [], durationSec: 30, broll: [] };
+    let resolveMedia!: (value: typeof media) => void;
+    vi.mocked(registry.media.renderMedia).mockImplementationOnce(() => new Promise(resolve => { resolveMedia = resolve; }));
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    async function observe(state: 'away' | 'unknown', duration: number) {
+      for (let ms = 0; ms < duration; ms += 200) {
+        emit({ t: Date.now(), score: 0, confidence: state === 'unknown' ? 0 : 1,
+          gazeTracking: { state, awayMs: 40000, thresholdMs: 30000 } });
+        await advance(200);
+      }
+    }
+    await observe('away', 35_000);
+    await observe('unknown', 600);
+    expect(store.useApp.getState().live.recapPreparation).toBe('preparing');
+    resolveMedia(media); await flush();
+    expect(store.useApp.getState().rescue).toBeNull();
+    await observe('away', 600);
+    expect(registry.media.renderMedia).toHaveBeenCalledTimes(1);
+    expect(store.useApp.getState().rescue).toMatchObject({ phase: 'playing', trigger: 'gaze' });
+    const events = share.getScreenTimeline()!.events.map(e => e.type);
+    expect(events).toContain('preparation-ready');
+    expect(events).not.toContain('preparation-cancelled');
+  });
+
+  it('reuses screen content across observation indices but not changed lessons', async () => {
+    const { getPack } = await import('./packs');
+    const { DEFAULT_VARIANT } = await import('../contracts/defaults');
+    const deck = { id: 'screen-cache', title: 'Shared screen', sourceType: 'screen' as const, slideCount: 3,
+      slides: ['Outliers are unusual observations.', 'Outliers  are unusual\nobservations.', 'Clustering groups similar observations.']
+        .map((text, index) => ({ index, title: `Screen moment ${index}`, text })) };
+    await Promise.all([getPack(deck, 0, DEFAULT_VARIANT, 1), getPack(deck, 1, DEFAULT_VARIANT, 1)]);
+    expect(registry.content.getScript).toHaveBeenCalledTimes(1);
+    expect(registry.media.renderMedia).toHaveBeenCalledTimes(1);
+    await getPack(deck, 2, DEFAULT_VARIANT, 1);
+    expect(registry.content.getScript).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not log default focused samples while screen OCR has no usable context', async () => {
+    store.actions.addDeck({ id: 'screen-test', title: 'Shared screen', sourceType: 'screen', slides: [], slideCount: 0 });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    for (let i = 0; i < 20; i++) {
+      emit({ t: Date.now(), score: 100, confidence: 1 });
+      await advance(100);
+    }
+    await engine.endSession();
+    const log = store.useApp.getState().report!.log;
+    expect(log.samples).toEqual([]);
+    expect(log.attentionSource).toBe('unavailable');
+    expect(log.screenDiagnostics).toBeDefined();
+  });
   it('records tab activity without inventing focus samples or generating recaps', async () => {
     vi.mocked(registry.canRecap).mockReturnValue(false);
     await engine.enterStudy();
@@ -226,6 +364,31 @@ describe('session lifecycle', () => {
 });
 
 describe('local gaze diagnostics', () => {
+  it('exports a screen trajectory even with no OCR or combined focus samples, without uploading it', async () => {
+    store.actions.addDeck({ id: 'screen-trace', title: 'Shared screen', sourceType: 'screen', slideCount: 1, slides: [{ index: 0, title: 'Shared screen', text: '' }] });
+    let uploadedTrace: unknown = 'not called';
+    vi.mocked(registry.adaptive.endSession).mockImplementationOnce(async log => {
+      uploadedTrace = log.gazeTrace;
+      return { score: { sustainedEpisodeMedianSec: 0 } } as never;
+    });
+    await engine.enterStudy();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    const calibration = {
+      id: 'test-calibration', at: Date.now(), model: 'blazegaze', validation: null,
+      geometry: { width: 1920, height: 1080, screenWidth: 1920, screenHeight: 1080, windowX: 0, windowY: 0, pixelRatio: 1, fullscreen: true },
+    };
+    for (let i = 0; i < 20; i++) {
+      emit({ t: Date.now(), confidence: 0, score: 0, gazeTrace: { calibration, raw: { x: i / 20, y: .5 }, valid: true, reason: 'screen' } });
+      await advance(100);
+    }
+    await engine.endSession();
+    const log = store.useApp.getState().report!.log;
+    expect(log.samples).toEqual([]);
+    expect(log.gazeTrace!.samples).toHaveLength(20);
+    expect(log.gazeTrace!.samples.every(s => s.status === 'valid')).toBe(true);
+    expect(uploadedTrace).toBeUndefined();
+  });
+
   it('logs sustained eye closure as non-focus without invoking the legacy three-second drowsy rescue', async () => {
     Object.assign(registry.attention, { usesOffscreenRule: true });
     await engine.enterStudy();

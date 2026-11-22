@@ -5,7 +5,7 @@ import { cameraErrorName, type CameraStatus } from '../lib/camera';
 import { ensureAttention, ensureCamera, stopCalibrationCamera, stopProvider } from '../session/engine';
 import { actions, currentDeck } from '../store';
 
-export function LocalCalibration({ provider }: { provider: AttentionProvider }) {
+export function LocalCalibration({ provider, screenStudy = false }: { provider: AttentionProvider; screenStudy?: boolean }) {
   const [target, setTarget] = useState<CalibrationTarget | null>(null);
   const [message, setMessage] = useState('Starting the camera and gaze model…');
   const [error, setError] = useState(false);
@@ -38,7 +38,7 @@ export function LocalCalibration({ provider }: { provider: AttentionProvider }) 
       await Promise.resolve();
       if (run.signal.aborted) return;
       if (provider.calibrationModel) diagnostic = startCalibrationDiagnostic(provider.calibrationModel);
-      provider.prepareCalibration?.();
+      provider.prepareCalibration?.({ screenStudy });
       try {
         camera = await ensureCamera();
         run.signal.throwIfAborted();
@@ -83,7 +83,7 @@ export function LocalCalibration({ provider }: { provider: AttentionProvider }) 
       run.abort();
       finish('interrupted');
     };
-  }, [attempt, provider]);
+  }, [attempt, provider, screenStudy]);
 
   async function retry() {
     setError(false);

@@ -94,7 +94,7 @@ export function DeskScreen() {
               <input id="screen-goal" type="text" maxLength={300} value={goal} onChange={(e) => setGoal(e.target.value)}
                 className="rounded-lg border border-rule bg-sheet px-3 py-2 text-[15px]" placeholder="e.g. Review reinforcement learning"
                 aria-describedby="screen-goal-help" />
-              <p id="screen-goal-help" className="text-[13px] text-graphite">Share a tab or window for local screen reading. Add a goal to enable activity reminders.</p>
+              <p id="screen-goal-help" className="text-[13px] text-graphite">Share your entire calibrated display to study across apps. Add a goal to detect unrelated content. Connect narration in Settings for video reminders.</p>
               <button type="submit" className="btn btn-quiet mt-1 justify-self-start" disabled={!!busy || !ready}>Share your screen</button>
             </form>
             {DEMO_MODE && <button type="button" className="btn btn-quiet mt-4" onClick={async () => {

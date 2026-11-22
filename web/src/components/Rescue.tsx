@@ -4,7 +4,6 @@ import { narrate, type Narration } from '../lib/narrator';
 import { DEMO_MODE } from '../lib/features';
 import { registry } from '../providers/registry';
 import { answerQuiz, clipEnded, finishRescue, playbackBlocked, playbackFailed, playbackStarted, skipClip, toggleWrongFact } from '../session/engine';
-import { screenRecapMedia } from '../session/packs';
 import { useApp, useDeck, type RescueUI } from '../store';
 import { Gameplay } from './Gameplay';
 import { Icon } from './Icon';
@@ -23,7 +22,7 @@ export function Rescue() {
   const [muted, setMuted] = useState(false);
 
   useEffect(() => {
-    (screenStudy ? screenRecapMedia : registry.media).listGameplayLoops().then(setLoops).catch(() => setLoops([]));
+    registry.media.listGameplayLoops().then(setLoops).catch(() => setLoops([]));
   }, [screenStudy]);
 
   useEffect(() => {
@@ -44,6 +43,7 @@ export function Rescue() {
   const variant = rescue.choice?.variant;
   const loop = loops.find((l) => l.type === variant?.gameplayType) ?? loops[0];
   const reason = rescue.trigger === 'manual' ? 'Recap requested'
+    : rescue.trigger === 'content' ? 'Unrelated content for 30 seconds'
     : rescue.trigger === 'window' ? 'Left the study window'
     : rescue.trigger === 'drowsy' ? 'Eyes closed'
     : rescue.offscreen ? 'Looked away for 30 seconds'
@@ -181,7 +181,6 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
     let cancelled = false;
     setAwaitingPlay(false);
     const n = narrate(pack.media, text, pack.variant, muted, {
-      localOnly: deck.sourceType === 'screen',
       onBlocked: () => { if (!cancelled) { setAwaitingPlay(true); playbackBlocked(); } },
       onPlaying: () => { if (!cancelled) { setAwaitingPlay(false); playbackStarted(); } },
     }, video.current ?? undefined);

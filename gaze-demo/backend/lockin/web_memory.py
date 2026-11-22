@@ -60,7 +60,7 @@ class RetrievalQuery(Query):
 class Outcome(Query):
     rescue_id: str = Field(min_length=1, max_length=100)
     session_id: str = Field(min_length=1, max_length=100)
-    trigger: Literal['gaze', 'window', 'drowsy']
+    trigger: Literal['gaze', 'window', 'drowsy', 'content']
     style: Style
     clip_seconds: float = Field(ge=0, le=3600)
     skipped: bool

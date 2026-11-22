@@ -1,4 +1,5 @@
 import type { TrackerRuntimeDiagnostic } from '../../../gaze-demo/backend/static/gaze.js';
+import type { GazeTrace, TraceObservation } from '../gazeTrace/types';
 
 /**
  * LockIn — shared data types.
@@ -192,6 +193,7 @@ export interface GazeTracking {
 }
 
 export interface FocusSample {
+  gazeTrace?: TraceObservation;
   /** ms since epoch (Date.now()) */
   t: number;
   /** 0–100 focus score from the camera only. Window focus is added by the UI. */
@@ -225,7 +227,7 @@ export type FocusState =
   | 'break'
   | 'paused';
 
-export type LapseTrigger = 'gaze' | 'window' | 'drowsy' | 'manual';
+export type LapseTrigger = 'gaze' | 'window' | 'drowsy' | 'manual' | 'content';
 
 /** Thresholds the state machine uses. Adaptive AI may return per-user overrides. */
 export interface SessionConfig {
@@ -341,7 +343,28 @@ export interface FocusLogEntry {
   slideIndex: number;
 }
 
+export interface ScreenDiagnostic {
+  displaySurface?: string;
+  capturedAt?: number;
+  at: number;
+  status: string;
+  engine?: string;
+  message?: string;
+  durationMs?: number;
+  lineCount?: number;
+  width?: number;
+  height?: number;
+  stage?: string;
+  restarts?: number;
+  lastFailure?: { reason: string; stage: string; at: number } | null;
+}
+
 export interface SessionLog {
+  screenAnalysis?: import('../screenStudy/types').ScreenAnalysis;
+  /** Local trajectory data; independent of combined attention measurements. */
+  gazeTrace?: GazeTrace;
+  /** Local OCR diagnostics contain metadata only, never screenshots or OCR text. */
+  screenDiagnostics?: { samples: ScreenDiagnostic[]; droppedSamples: number };
   gazeDiagnostics?: { samples: (TrackerRuntimeDiagnostic & { t: number })[]; droppedSamples: number };
   /** Simulated sessions are excluded from normal history. */
   attentionSource?: 'gaze' | 'simulated' | 'unavailable';

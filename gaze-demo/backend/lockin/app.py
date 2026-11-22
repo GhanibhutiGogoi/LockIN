@@ -67,7 +67,8 @@ def create_app(db_path=None,screen_provider=None,memory=None,stress_model=None):
         origin=req.headers.get('origin')
         allowed = {'http://127.0.0.1:8000', 'http://localhost:8000', 'http://testserver'}
         if req.url.path.startswith(('/v1/web-memory/', '/v1/web-screen/')):
-            allowed.update({'http://127.0.0.1:5180', 'http://localhost:5180'})
+            allowed.update({'http://127.0.0.1:5180', 'http://localhost:5180',
+                            'http://127.0.0.1:5181', 'http://localhost:5181'})
         if origin and origin not in allowed:
             return JSONResponse({'detail':'same origin required'},403)
         response=await call_next(req)

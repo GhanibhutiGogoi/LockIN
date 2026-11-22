@@ -30,11 +30,11 @@ export interface ServiceConfig {
 }
 export type IntegrationConfig = Record<ServiceTeam, ServiceConfig>;
 
-export const TEAM_INFO: Record<ServiceTeam, { title: string; zh: string; owns: string; modes: string[] }> = {
-  attention: { title: 'Gaze tracking', zh: '視線追蹤', owns: 'Webcam → focus score 0–100, ~10 Hz', modes: ['off', 'ws', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
-  content: { title: 'AI analysis', zh: 'AI 分析', owns: 'Deck parsing, script + quiz, fact-check', modes: ['local', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
-  media: { title: 'Video', zh: '做影片', owns: 'Voice, word timings, b-roll, gameplay library', modes: ['off', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
-  adaptive: { title: 'Personal AI', zh: '個人化 AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['local', 'http', 'memory', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+export const TEAM_INFO: Record<ServiceTeam, { title: string; owns: string; modes: string[] }> = {
+  attention: { title: 'Gaze tracking', owns: 'Webcam → focus score 0–100, ~10 Hz', modes: ['off', 'ws', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+  content: { title: 'AI analysis', owns: 'Deck parsing, script + quiz, fact-check', modes: ['local', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+  media: { title: 'Video', owns: 'Voice, word timings, b-roll, gameplay library', modes: ['off', 'http', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
+  adaptive: { title: 'Personal AI', owns: 'Variant picker, rewards, session review, profile memo', modes: ['local', 'http', 'memory', ...((import.meta.env.MODE === 'demo') ? ['mock'] : [])] },
 };
 
 const env = import.meta.env;

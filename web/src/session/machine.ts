@@ -36,6 +36,7 @@ export interface MachineInput {
   /** The local gaze tracker owns dwell timing and emits a single event per excursion. */
   offscreenRule?: boolean;
   offscreenLapse?: boolean;
+  screenLapse?: 'gaze' | 'content';
 }
 
 export interface Machine {
@@ -170,6 +171,14 @@ export function step(
   const drowsyLapse = eyesClosedSince !== null && sec(now - eyesClosedSince) >= cfg.eyesClosedLapseSec;
   const offscreenLapse = input.offscreenRule && input.offscreenLapse && !input.noteTaking;
 
+  if (input.screenLapse && !input.noteTaking && ['focused', 'drifting', 'recovering'].includes(m.state)) {
+    if (m.state === 'recovering' && m.rescuesInRow >= cfg.maxRescuesInRow) {
+      events.push({ type: 'suggestBreak', reason: 'repeated' });
+      return { m: go(m, 'break', now, events), events };
+    }
+    return { m: lapseOrSuppress(m, now, cfg, input.screenLapse, events), events };
+  }
+
   switch (m.state) {
     case 'focused': {
       if (windowLapse) return { m: lapseOrSuppress(m, now, cfg, 'window', events), events };
@@ -213,7 +222,7 @@ export function step(
         events.push({ type: 'refocused', afterMs });
         return { m, events };
       }
-      const offscreenRecovery = input.offscreenRule && m.lastTrigger === 'gaze';
+      const offscreenRecovery = input.offscreenRule && (m.lastTrigger === 'gaze' || m.lastTrigger === 'content');
       if (offscreenRecovery ? offscreenLapse : sec(now - m.since) >= cfg.recoverTimeoutSec) {
         if (m.rescuesInRow >= cfg.maxRescuesInRow) {
           events.push({ type: 'suggestBreak', reason: 'repeated' });

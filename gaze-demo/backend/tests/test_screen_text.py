@@ -6,6 +6,7 @@ from lockin.memory import Memory
 
 
 def test_shared_screen_ocr_accepts_only_local_jpeg(tmp_path, monkeypatch):
+    monkeypatch.setenv('LOCKIN_SCREEN_OCR', 'vision')
     seen = []
 
     def recognize(frame):

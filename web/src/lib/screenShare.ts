@@ -1,10 +1,14 @@
 import { actions, useApp } from '../store';
-import { notifyOffTopic, playCue, primeCue } from './callback';
-import { advanceActivityReminder, CLASSIFY_EVERY_MS, emptyActivityReminder, type ActivityLabel } from './screenActivity';
+import { primeCue } from './callback';
 import { uid } from './storage';
+import type { Deck, ScreenDiagnostic } from '../contracts/types';
+import { ScreenTimeline, SCENE_GAP_MS } from '../screenStudy/timeline';
+import { ScreenProcessor } from '../screenStudy/processor';
+import { sceneChanged } from '../screenStudy/sceneChange';
+import type { ScreenScene } from '../screenStudy/types';
 
-const SAMPLE_MS = 2000;
-const FRESH_MS = 8000;
+const SAMPLE_MS = 750;
+const REFRESH_MS = 120_000;
 
 interface Capture {
   deckId: string;
@@ -12,16 +16,49 @@ interface Capture {
   events: AbortController;
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
+  probe: HTMLCanvasElement;
+  signature?: Uint8ClampedArray;
+  frame?: Promise<Blob | null>;
   timer?: number;
-  request?: AbortController;
-  classification?: AbortController;
-  nextClassificationAt: number;
-  reminder: ReturnType<typeof emptyActivityReminder>;
 }
 
 let capture: Capture | undefined;
 let reading = false;
 let choosing = false;
+let diagnostics: ScreenDiagnostic[] = [];
+let droppedSamples = 0;
+let timeline: ScreenTimeline | undefined;
+let processor: ScreenProcessor | undefined;
+let studyContext: { deck: Deck; slideIndex: number } | undefined;
+let contextTimestamp = 0;
+
+function recordScreen(value: Omit<ScreenDiagnostic, 'at'>) {
+  diagnostics.push({ at: Date.now(), ...value });
+  if (diagnostics.length > 2000) { diagnostics.shift(); droppedSamples++; }
+}
+
+export const getScreenDiagnostics = () => ({ samples: [...diagnostics], droppedSamples });
+export const getScreenTimeline = () => timeline;
+export const getStudyScreenContext = () => studyContext;
+export const getLiveScreenScene = (now = Date.now()) => reading ? timeline?.live(now) : undefined;
+
+export function beginScreenAnalysis(startedAt: number) {
+  processor?.cancel();
+  timeline = new ScreenTimeline(startedAt, useApp.getState().screenGoal);
+  const owner = timeline;
+  processor = new ScreenProcessor(owner, scene => { if (timeline === owner) publish(scene); });
+  studyContext = undefined;
+  contextTimestamp = 0;
+  if (capture) capture.signature = undefined;
+}
+
+/** Stop acquisition immediately, then let bounded historical work finish. */
+export async function finishScreenAnalysis() {
+  const pendingFrame = capture?.frame;
+  stopScreenShare();
+  await pendingFrame;
+  await processor?.finish();
+}
 
 export async function shareStudyScreen(reuseSession = false, goal = '') {
   if (choosing || capture) return;
@@ -29,82 +66,64 @@ export async function shareStudyScreen(reuseSession = false, goal = '') {
     actions.toast('Screen sharing requires a supported desktop browser on localhost.', 'error');
     return;
   }
-
   choosing = true;
   primeCue();
   const previous = useApp.getState();
   let stream: MediaStream | undefined;
   try {
-    const options = {
-      video: { frameRate: { ideal: 3, max: 5 } },
-      audio: false,
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 3, max: 5 } }, audio: false,
       selfBrowserSurface: 'exclude',
-    } as DisplayMediaStreamOptions & { selfBrowserSurface: 'exclude' };
-    stream = await navigator.mediaDevices.getDisplayMedia(options);
+    } as DisplayMediaStreamOptions & { selfBrowserSurface: 'exclude' });
     const track = stream.getVideoTracks()[0];
     if (!track || track.readyState !== 'live') throw new Error('Screen stream unavailable');
-
     const current = useApp.getState();
     if (current.screen !== previous.screen || current.deckId !== previous.deckId) {
-      stream.getTracks().forEach((item) => item.stop());
+      stream.getTracks().forEach(item => item.stop());
       return;
     }
-
     const deckId = reuseSession ? current.deckId : uid('screen_');
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
     video.srcObject = stream;
-    const lease: Capture = {
-      deckId, track, video, events: new AbortController(), canvas: document.createElement('canvas'),
-      nextClassificationAt: 0, reminder: emptyActivityReminder(),
-    };
+    const lease: Capture = { deckId, track, video, events: new AbortController(),
+      canvas: document.createElement('canvas'), probe: document.createElement('canvas') };
+    lease.probe.width = 256;
+    lease.probe.height = 144;
     track.enabled = reading;
     if (!reuseSession) {
-      useApp.setState({ screenGoal: goal.trim().slice(0, 300), screenActivity: null });
+      processor?.cancel(); processor = undefined; timeline = undefined; studyContext = undefined;
+      diagnostics = []; droppedSamples = 0;
+      useApp.setState({ screenOcr: null, screenGoal: goal.trim().slice(0, 300), screenActivity: null });
       actions.addDeck({ id: deckId, sourceType: 'screen', title: 'Shared screen', slides: [], slideCount: 0 });
       actions.go('study');
     }
     capture = lease;
+    const settings = track.getSettings();
+    recordScreen({ status: 'selected', message: settings.displaySurface ?? 'unknown',
+      displaySurface: settings.displaySurface, width: settings.width, height: settings.height });
+    if (settings.displaySurface && settings.displaySurface !== 'monitor') actions.toast('Share the entire calibrated display to follow study across WPS and browser tabs.');
     track.addEventListener('ended', stopScreenShare, { signal: lease.events.signal, once: true });
     track.addEventListener('mute', () => {
-      if (!reading) return;
-      cancelSample(lease);
+      timeline?.breakScene(); lease.signature = undefined;
       useApp.setState({ screenReading: 'reading', screenSeenAt: null, screenActivity: null });
-      schedule(lease);
     }, { signal: lease.events.signal });
     useApp.setState({ screenReading: reading ? 'reading' : 'waiting', screenSeenAt: null });
     if (reading) schedule(lease, 0);
   } catch (error) {
-    stream?.getTracks().forEach((item) => item.stop());
-    if (!(error instanceof DOMException && error.name === 'NotAllowedError')) {
-      actions.toast('Screen sharing could not start. Try selecting a window or tab again.', 'error');
-    }
-  } finally {
-    choosing = false;
-  }
-}
-
-function cancelSample(lease: Capture) {
-  if (lease.timer !== undefined) window.clearTimeout(lease.timer);
-  lease.timer = undefined;
-  lease.request?.abort();
-  lease.request = undefined;
-  resetClassification(lease);
-}
-
-function resetClassification(lease: Capture) {
-  lease.classification?.abort();
-  lease.classification = undefined;
-  lease.nextClassificationAt = 0;
-  lease.reminder = { ...lease.reminder, previousOffTopicAt: null, reminded: false };
+    stream?.getTracks().forEach(item => item.stop());
+    if (!(error instanceof DOMException && error.name === 'NotAllowedError')) actions.toast('Screen sharing could not start. Try selecting your display again.', 'error');
+  } finally { choosing = false; }
 }
 
 export function stopScreenShare() {
   const lease = capture;
   if (!lease) return;
   capture = undefined;
-  cancelSample(lease);
+  recordScreen({ status: 'stopped' });
+  if (lease.timer !== undefined) clearTimeout(lease.timer);
+  timeline?.breakScene();
   lease.events.abort();
   lease.track.stop();
   lease.video.srcObject = null;
@@ -114,28 +133,24 @@ export function stopScreenShare() {
 export function setScreenReading(enabled: boolean) {
   reading = enabled;
   if (!capture) return;
-  cancelSample(capture);
+  recordScreen({ status: enabled ? 'reading' : 'paused' });
+  if (capture.timer !== undefined) clearTimeout(capture.timer);
+  timeline?.breakScene(); capture.signature = undefined;
   capture.track.enabled = enabled;
   if (!enabled) capture.video.pause();
   useApp.setState({ screenReading: enabled ? 'reading' : 'paused', screenSeenAt: null, screenActivity: null });
   if (enabled) schedule(capture, 0);
 }
 
-export function hasRecentScreenText(now = Date.now()) {
-  const { screenSeenAt, screenReading } = useApp.getState();
-  return screenReading === 'ready' && screenSeenAt !== null
-    && now >= screenSeenAt && now - screenSeenAt <= FRESH_MS;
-}
+export function hasRecentScreenText(now = Date.now()) { return getLiveScreenScene(now)?.status === 'ready'; }
 
-/** A classified session only recaps screen text that the model found relevant. */
 export function hasStudyRecapContext(now: number) {
-  const { screenGoal, screenActivity } = useApp.getState();
-  return hasRecentScreenText(now) && (!screenGoal || screenActivity === 'related');
+  const scene = getLiveScreenScene(now);
+  return scene?.status === 'ready' && (!timeline?.goal || scene.label === 'related');
 }
 
 function schedule(lease: Capture, delay = SAMPLE_MS) {
-  if (!reading || capture !== lease) return;
-  lease.timer = window.setTimeout(() => void sample(lease), delay);
+  if (reading && capture === lease) lease.timer = window.setTimeout(() => void sample(lease), delay);
 }
 
 function showsLockIn(lease: Capture) {
@@ -143,117 +158,86 @@ function showsLockIn(lease: Capture) {
   return (surface === 'monitor' || surface === 'window') && document.hasFocus();
 }
 
-async function sample(lease: Capture) {
-  if (capture !== lease || !reading) return;
-  lease.timer = undefined;
-  const request = new AbortController();
-  lease.request = request;
-  const { video, canvas, track, deckId } = lease;
-
-  try {
-    if (track.readyState !== 'live') {
-      stopScreenShare();
-      return;
-    }
-    if (track.muted || showsLockIn(lease)) {
-      resetClassification(lease);
-      useApp.setState(track.muted
-        ? { screenReading: 'reading', screenSeenAt: null, screenActivity: null }
-        : { screenReading: 'on-lockin', screenSeenAt: null });
-      return;
-    }
-    if (video.paused) await video.play();
-    if (request.signal.aborted) return;
-    const { videoWidth: width, videoHeight: height } = video;
-    if (!width || !height) return;
-    const scale = Math.min(1, 1920 / Math.max(width, height));
-    canvas.width = Math.max(1, Math.round(width * scale));
-    canvas.height = Math.max(1, Math.round(height * scale));
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('Screen canvas unavailable');
-    const seenAt = Date.now();
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const frame = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
-    canvas.width = canvas.height = 1;
-    if (!frame || request.signal.aborted || showsLockIn(lease)) return;
-    const response = await fetch('/v1/web-screen/text', {
-      method: 'POST', headers: { 'content-type': 'image/jpeg' }, body: frame,
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(6500)]),
-    });
-    if (!response.ok) throw new Error('Screen text recognition failed');
-    const { lines } = await response.json() as { lines: string[] };
-    if (request.signal.aborted || showsLockIn(lease)) return;
-    actions.acceptScreenText(deckId, lines, seenAt);
-    const state = useApp.getState();
-    if (state.screenReading !== 'ready') resetClassification(lease);
-    else if (state.screenGoal) void classify(lease, state.deckId, state.slideIndex, state.screenGoal, seenAt);
-  } catch {
-    if (!request.signal.aborted) {
-      resetClassification(lease);
-      useApp.setState({ screenReading: 'error', screenSeenAt: null, screenActivity: null });
-    }
-  } finally {
-    if (lease.request === request) {
-      lease.request = undefined;
-      // Keep OCR responsive and take the next classification frame near its deadline.
-      const untilClassification = lease.nextClassificationAt - Date.now();
-      schedule(lease, untilClassification > 0 ? Math.min(SAMPLE_MS, untilClassification) : SAMPLE_MS);
-    }
+function publish(scene: ScreenScene) {
+  recordScreen({ status: scene.status, capturedAt: scene.timestamp,
+    durationMs: scene.ocrDurationMs,
+    lineCount: scene.blocks?.length ?? scene.text?.split('\n').length ?? 0,
+    width: scene.width, height: scene.height, message: scene.message ?? scene.label ?? undefined });
+  const lease = capture;
+  // Preserve historical text even when inference finishes after the learner switched pages.
+  const state = useApp.getState();
+  const deck = state.decks.find(d => d.id === state.deckId && d.sourceType === 'screen');
+  if (scene.status === 'ready' && scene.slideIndex === undefined && deck) {
+    scene.slideIndex = deck.slides.length;
+    const slides = [...deck.slides, { index: scene.slideIndex, title: `Screen moment ${scene.id}`, text: scene.text! }];
+    useApp.setState({ decks: state.decks.map(d => d === deck ? { ...d, slides, slideCount: slides.length } : d) });
   }
+  if (scene.status === 'ready' && scene.slideIndex !== undefined && scene.timestamp >= contextTimestamp
+    && (!timeline?.goal || (scene.label === 'related' && !!scene.studyText?.trim()))) {
+    const saved = useApp.getState().decks.find(d => d.id === state.deckId)!;
+    const slides = saved.slides.map((slide, index) => index === scene.slideIndex
+      ? { ...slide, text: scene.studyText ?? scene.text! } : slide);
+    studyContext = { deck: { ...saved, slides }, slideIndex: scene.slideIndex };
+    contextTimestamp = scene.timestamp;
+  }
+  if (!lease || !reading || timeline?.current !== scene || Date.now() - scene.observedUntil > SCENE_GAP_MS || showsLockIn(lease)) return;
+  useApp.setState({ screenOcr: { status: scene.status, message: scene.message ??
+    (scene.status === 'ready' ? 'Screen text extracted. Matching it with your gaze.' : 'Reading the current screen.') } });
+  if (scene.status === 'ready') {
+    useApp.setState({ slideIndex: scene.slideIndex ?? state.slideIndex, screenReading: 'ready',
+      screenSeenAt: scene.observedUntil, screenActivity: scene.label });
+  } else useApp.setState({ screenReading: scene.status === 'pending' ? 'reading' : scene.status === 'no-text' ? 'no-text' : 'error', screenSeenAt: null });
 }
 
-async function classify(lease: Capture, deckId: string, slideIndex: number, goal: string, seenAt: number) {
-  if (lease.classification || seenAt < lease.nextClassificationAt || lease.deckId !== deckId) return;
-  const text = useApp.getState().decks.find((deck) => deck.id === deckId)?.slides[slideIndex]?.text;
-  if (!text) return;
-
-  const request = new AbortController();
-  lease.classification = request;
-  lease.nextClassificationAt = seenAt + CLASSIFY_EVERY_MS;
-  let label: ActivityLabel = 'unavailable';
+async function sample(lease: Capture) {
+  if (capture !== lease || !reading || !timeline || !processor) return;
+  const owner = timeline;
   try {
-    const response = await fetch('/v1/web-screen/activity', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ goal, text }),
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(4500)]),
-    });
-    if (response.ok) {
-      const result: { label?: unknown } = await response.json();
-      if (result.label === 'related' || result.label === 'off-topic' || result.label === 'uncertain') label = result.label;
+    if (lease.track.readyState !== 'live') { stopScreenShare(); return; }
+    if (showsLockIn(lease) || useApp.getState().rescue || useApp.getState().breakCard || lease.track.muted) {
+      owner.breakScene(); lease.signature = undefined;
+      useApp.setState({ screenReading: 'on-lockin', screenSeenAt: null, screenActivity: null });
+      return;
     }
-  } catch {
-    // A failed inference breaks the reminder streak.
-  } finally {
-    if (lease.classification === request) lease.classification = undefined;
-  }
-  if (request.signal.aborted || capture !== lease) return;
-
-  const current = useApp.getState();
-  if (current.slideIndex !== slideIndex || !hasRecentScreenText() || showsLockIn(lease)) {
-    lease.reminder = advanceActivityReminder(lease.reminder, 'uncertain', seenAt, 0).state;
-    return;
-  }
-
-  useApp.setState({ screenActivity: label });
-  const { state, notify } = advanceActivityReminder(
-    lease.reminder, label, seenAt, Math.max(60_000, (current.settings.cooldownSec ?? 60) * 1000),
-  );
-  lease.reminder = state;
-  if (notify && !current.rescue && !current.breakCard && (current.live.noteTakingUntil ?? 0) <= Date.now()) {
-    actions.toast('This page may be unrelated to your study goal.');
-    playCue();
-    if (!document.hasFocus()) notifyOffTopic();
-  }
+    if (lease.video.paused) await lease.video.play();
+    if (!reading || capture !== lease || timeline !== owner) return;
+    const width = lease.video.videoWidth, height = lease.video.videoHeight;
+    if (!width || !height) return;
+    const probe = lease.probe.getContext('2d', { willReadFrequently: true })!;
+    probe.drawImage(lease.video, 0, 0, 256, 144);
+    const signature = probe.getImageData(0, 0, 256, 144).data;
+    const now = Date.now(), previous = owner.current;
+    const retry = (previous?.status === 'error' || previous?.label === 'unavailable')
+      && now - (previous.classifiedAt ?? previous.completedAt ?? now) >= 5000;
+    const changed = sceneChanged(lease.signature, signature) || retry || (!!previous && now - previous.timestamp >= REFRESH_MS);
+    const scale = Math.min(1, 1600 / Math.max(width, height));
+    const scene = owner.observe(now, changed, Math.round(width * scale), Math.round(height * scale), lease.track.getSettings().displaySurface ?? 'unknown');
+    if (scene === previous) {
+      if (scene.status === 'ready') useApp.setState({ screenSeenAt: scene.observedUntil, screenReading: 'ready', screenActivity: scene.label });
+      return;
+    }
+    // Compare against the scene's original frame so gradual scrolling still accumulates.
+    if (changed) lease.signature = signature;
+    useApp.setState({ screenReading: 'reading', screenSeenAt: null, screenActivity: null });
+    lease.canvas.width = scene.width; lease.canvas.height = scene.height;
+    lease.canvas.getContext('2d')!.drawImage(lease.video, 0, 0, scene.width, scene.height);
+    lease.frame = new Promise<Blob | null>(resolve => lease.canvas.toBlob(resolve, 'image/jpeg', .85));
+    const frame = await lease.frame;
+    lease.frame = undefined;
+    lease.canvas.width = lease.canvas.height = 1;
+    if (frame && owner === timeline) processor.enqueue(scene, frame);
+    else { scene.status = 'error'; scene.message = 'Screen capture unavailable.'; }
+  } catch (error) {
+    recordScreen({ status: 'error', message: error instanceof Error ? error.message : 'Screen capture failed.' });
+    owner.breakScene();
+    useApp.setState({ screenReading: 'error', screenSeenAt: null });
+  } finally { schedule(lease); }
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('pagehide', stopScreenShare);
+  window.addEventListener('pagehide', () => { stopScreenShare(); processor?.cancel(); });
   useApp.subscribe((state, previous) => {
-    if (capture && (state.deckId !== capture.deckId || state.screen === 'desk' || state.screen === 'report')) {
-      reading = false;
-      stopScreenShare();
-    }
-    if (state.screen === 'desk' && previous.screen !== 'desk' && previous.decks.some((deck) => deck.sourceType === 'screen')) {
-      actions.discardScreenDecks();
-    }
+    if (capture && (state.deckId !== capture.deckId || state.screen === 'desk' || state.screen === 'report')) { reading = false; stopScreenShare(); }
+    if (state.screen === 'desk' && previous.screen !== 'desk' && previous.decks.some(d => d.sourceType === 'screen')) actions.discardScreenDecks();
   });
 }

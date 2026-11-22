@@ -2,8 +2,11 @@ import { useEffect, type ReactNode } from 'react';
 import type { Deck, MemoryDecision, MemoryStyle, RescueOutcome } from '../contracts/types';
 import { memoryStyle } from '../providers/memory/adaptive';
 import { focusedEpisodes, formatDuration, slidesThatLostYou } from '../session/metrics';
+import { exportReport } from '../session/reportExport';
 import { actions, useApp, type Report } from '../store';
 import { FocusTimeline } from './FocusTimeline';
+import { GazeTraceReport } from './GazeTraceReport';
+import { ScreenAnalysisReport } from './ScreenAnalysisReport';
 import { Icon } from './Icon';
 import { IntegrationsButton } from './IntegrationsPanel';
 import { SlideView } from './SlideView';
@@ -18,12 +21,13 @@ export function ReportScreen() {
   const { deck, log, review, questions } = report;
   const screenStudy = deck.sourceType === 'screen';
   const canStudy = decks.some((d) => d.id === deck.id);
-  if (!log.samples.length || log.attentionSource === 'unavailable') return <ReadingReport report={report} canStudy={canStudy} />;
+  const measured = log.screenAnalysis?.summary;
+  if ((!log.samples.length && !measured?.measuredMs) || log.attentionSource === 'unavailable') return <ReadingReport report={report} canStudy={canStudy} />;
   const sc = review.score;
   const lost = slidesThatLostYou(log.rescues).slice(0, 4);
   const durationSec = log.activeSeconds ?? (log.endedAt - log.startedAt) / 1000;
-  const longestStretch = focusedEpisodes(log.samples).reduce((longest, seconds) => Math.max(longest, seconds), 0);
-  const measuredSeconds = log.samples.filter(s => !['paused', 'break', 'idle'].includes(s.state)).length;
+  const longestStretch = measured ? measured.longestFocusMs / 1000 : focusedEpisodes(log.samples).reduce((longest, seconds) => Math.max(longest, seconds), 0);
+  const measuredSeconds = measured ? measured.measuredMs / 1000 : log.samples.filter(s => !['paused', 'break', 'idle'].includes(s.state)).length;
   const lapses = log.rescues.filter((r) => r.context.rescueInRow === 1 && r.context.trigger !== 'manual').length;
   const answered = questions.filter((q) => q.chosen !== null);
   const correct = answered.filter((q) => q.chosen === q.answerIndex).length;
@@ -43,7 +47,7 @@ export function ReportScreen() {
 
   return (
     <div className="min-h-full">
-      <header className="mx-auto flex h-16 w-full max-w-[1360px] items-center gap-2 px-[max(20px,env(safe-area-inset-left))] pr-[max(12px,env(safe-area-inset-right))] lg:px-8 lg:pr-5">
+      <header className="mx-auto flex min-h-16 w-full max-w-[1360px] flex-wrap items-center gap-2 px-[max(20px,env(safe-area-inset-left))] py-3 pr-[max(12px,env(safe-area-inset-right))] lg:px-8 lg:pr-5">
         <button type="button" className="btn btn-ghost btn-sm -ml-2.5" onClick={() => actions.go('desk')}>
           <Icon name="arrow-left" size={18} /> Desk
         </button>
@@ -67,25 +71,21 @@ export function ReportScreen() {
                 {isSample && <span className="font-normal"> · example</span>}
                 {log.attentionSource === 'simulated' && <span className="font-normal"> · simulated, not saved</span>}
               </h1>
-              {durationSec < 120 ? (
-                <p className="mt-4 text-[clamp(36px,4.4vw,60px)] leading-[1.05] font-bold tracking-[-0.03em]">That was a quick one</p>
-              ) : (
-                <p className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-1">
-                  <span className="figure text-[clamp(64px,7.5vw,112px)] leading-[0.95]">{formatDuration(sc.sustainedEpisodeMedianSec)}</span>
-                  <span className="text-[20px] text-graphite">
-                    median measured focus stretch
-                    <Delta delta={sc.deltaVsBaseline ?? null} />
-                  </span>
-                </p>
-              )}
-              <p className="mt-3 text-[14px] text-graphite">Longest measured focus stretch: {formatDuration(longestStretch)}</p>
+              <p className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-1">
+                <span className="figure text-[clamp(64px,7.5vw,112px)] leading-[0.95]">{formatDuration(longestStretch)}</span>
+                <span className="text-[20px] text-graphite">longest measured focus stretch</span>
+              </p>
+              <p className="mt-3 text-[14px] text-graphite">
+                Median measured focus stretch: {formatDuration(sc.sustainedEpisodeMedianSec)}
+                <Delta delta={sc.deltaVsBaseline ?? null} />
+              </p>
             </div>
             <Memo memo={review.profileMemo} tips={review.tips} quick={durationSec < 120} className="hidden lg:block" />
           </section>
 
           <section className="mt-auto pt-10" aria-label="Focus across the session">
             <p className="text-[17px] text-graphite">
-              <Fact>{Math.round(sc.onTaskShare * 100)}%</Fact> of measured samples focused
+              <Fact>{Math.round(sc.onTaskShare * 100)}%</Fact> of measured {measured ? 'time' : 'samples'} focused
               <Dot />
               focus slipped <Fact>{slipped}</Fact>
               {sc.timeToRefocusMedianSec !== null && (
@@ -96,7 +96,9 @@ export function ReportScreen() {
               )}
             </p>
             <p className="mt-2 text-[13px] text-graphite">
-              Measured {formatDuration(measuredSeconds)} of {formatDuration(durationSec)} active time. Chart gaps indicate missing measurements.
+              Measured {formatDuration(measuredSeconds)} of {formatDuration(durationSec)} active time. {measured
+                ? 'Totals include short measured intervals. The chart shows seconds with at least 0.8s of evidence; gaps do not mean distraction.'
+                : 'Chart gaps indicate missing measurements.'}
             </p>
             <div className="mt-4 h-[clamp(180px,38svh,420px)]">
               <FocusTimeline samples={log.samples} rescues={log.rescues} deck={deck} sessionStart={log.startedAt} sessionSeconds={(log.endedAt - log.startedAt) / 1000} />
@@ -104,6 +106,8 @@ export function ReportScreen() {
           </section>
         </div>
 
+        {screenStudy && <ScreenAnalysisReport analysis={log.screenAnalysis} startedAt={log.startedAt} />}
+        {screenStudy && <GazeTraceReport trace={log.gazeTrace} sessionId={log.sessionId} durationMs={log.endedAt - log.startedAt} />}
         {/* on a phone the memo would push the chart off the first screen, so it opens the details instead */}
         <Memo memo={review.profileMemo} tips={review.tips} quick={durationSec < 120} className="mt-4 lg:hidden" />
 
@@ -279,7 +283,7 @@ const Fact = ({ children }: { children: ReactNode }) => <span className="num fon
 const Dot = () => <span className="mx-2 text-pencil" aria-hidden>·</span>;
 
 function downloadReport(report: Report) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify({ ...report, deck: { ...report.deck, pdfUrl: undefined } }, null, 2)], { type: 'application/json' }));
+  const url = URL.createObjectURL(new Blob([JSON.stringify(exportReport(report), null, 2)], { type: 'application/json' }));
   const link = document.createElement('a');
   link.href = url;
   link.download = `lockin-session-${report.log.sessionId}.json`;
@@ -309,7 +313,9 @@ function ReadingReport({ report, canStudy }: { report: Report; canStudy: boolean
       <h1 className="text-[clamp(30px,4vw,48px)] leading-tight">Session complete</h1>
       <p className="mt-4 break-words text-[22px]">{deck.title}</p>
       <p className="mt-2 text-[16px] text-graphite">{new Date(log.endedAt).toLocaleString()} · {formatDuration(active)} studying{!screenStudy && ` · ${visited.length} of ${deck.slideCount} slides visited`}</p>
-      <p className="mt-7 max-w-[65ch] text-[17px] leading-relaxed text-graphite">{screenStudy ? 'This session recorded study time without gaze measurements.' : 'No attention measurements were available for this session. This report records your study time and slides visited. Having the tab open does not establish that you were focused.'}</p>
+      <p className="mt-7 max-w-[65ch] text-[17px] leading-relaxed text-graphite">{screenStudy ? 'There was not enough aligned evidence for the focus curve. Inspect the screen and gaze windows below: missing gaze, unreadable content and uncertain relevance remain unknown. Delayed OCR is included when it can be matched to the original screen moment.' : 'No attention measurements were available for this session. This report records your study time and slides visited. Having the tab open does not establish that you were focused.'}</p>
+      {screenStudy && <ScreenAnalysisReport analysis={log.screenAnalysis} startedAt={log.startedAt} />}
+      {screenStudy && <GazeTraceReport trace={log.gazeTrace} sessionId={log.sessionId} durationMs={log.endedAt - log.startedAt} />}
       {!screenStudy && !canStudy && <p className="mt-4 text-[16px] text-graphite">The original deck is no longer in this browser. Upload it again to revisit the slides.</p>}
       {!screenStudy && <section className="mt-12" aria-labelledby="visited-title">
         <h2 id="visited-title" className="text-[23px]">Slides you visited</h2>

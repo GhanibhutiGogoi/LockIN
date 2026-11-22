@@ -8,18 +8,18 @@ for (const asset of assets) {
   await access(new URL(`../public/tracker/${asset}`, import.meta.url));
 }
 
-// Use real browser gaze with local recap fixtures and no memory backend.
+// Real gaze and explicitly connected recap services; no simulated media.
 const child = spawn(process.execPath, [
   fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url)),
-  '--mode', 'demo', '--host', '127.0.0.1', '--port', '5181', '--strictPort',
+  '--mode', 'gaze', '--host', '127.0.0.1', '--port', '5181', '--strictPort',
 ], {
   cwd: root,
   stdio: 'inherit',
   env: {
     ...process.env,
     VITE_ATTENTION_PROVIDER: 'local-gaze',
-    VITE_CONTENT_PROVIDER: 'mock',
-    VITE_MEDIA_PROVIDER: 'mock',
+    VITE_CONTENT_PROVIDER: 'local',
+    VITE_MEDIA_PROVIDER: 'off',
     VITE_ADAPTIVE_PROVIDER: 'local',
   },
 });

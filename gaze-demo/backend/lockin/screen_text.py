@@ -1,7 +1,9 @@
 """Extract text from a shared screen frame on this machine."""
 import json
 import subprocess
+import os
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
@@ -26,6 +28,33 @@ def recognize_screen_text(frame: bytes) -> list[str]:
 
 
 def register(app: FastAPI) -> None:
+    # The OCR launcher explicitly selects PaddleOCR; retain legacy macOS startup.
+    engine = os.getenv('LOCKIN_SCREEN_OCR', 'vision')
+    service = None
+    if engine == 'paddleocr':
+        from .screen_ocr import PaddleScreenOCR
+        service = PaddleScreenOCR()
+        previous_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def lifespan(application):
+            async with previous_lifespan(application):
+                service.start()
+                try:
+                    yield
+                finally:
+                    service.close()
+
+        app.router.lifespan_context = lifespan
+
+    @app.get('/v1/web-screen/status')
+    def screen_status():
+        if service:
+            return service.status()
+        available = engine == 'vision' and OCR_BINARY.is_file()
+        return {'status': 'ready' if available else 'unavailable', 'engine': engine,
+                'message': 'Local OCR is ready.' if available else 'Local OCR is not installed.'}
+
     @app.post('/v1/web-screen/text')
     async def screen_text(request: Request):
         if request.headers.get('content-type', '').lower() != 'image/jpeg':
@@ -37,5 +66,9 @@ def register(app: FastAPI) -> None:
             frame.extend(chunk)
         if not frame.startswith(b'\xff\xd8\xff'):
             raise HTTPException(422, 'Invalid JPEG')
+        if service:
+            return await run_in_threadpool(service.recognize, bytes(frame))
+        if engine != 'vision':
+            raise HTTPException(503, 'Unknown screen OCR engine.')
         lines = await run_in_threadpool(recognize_screen_text, bytes(frame))
         return {'lines': lines}

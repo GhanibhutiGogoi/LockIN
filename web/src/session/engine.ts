@@ -9,20 +9,23 @@
  * calibration keeps running into the session.
  */
 import type { AdaptiveProvider, AttentionProvider, MemorySource } from '../contracts/providers';
-import type { FocusLogEntry, FocusSample, GazeTracking, LapseTrigger, MemoryDecision, MemoryTopic, RescueContext, RescueOutcome, SessionConfig, SessionLog, Variant, VariantChoice } from '../contracts/types';
-import { notifyComeBack, playCue, primeCue, whenVisible } from '../lib/callback';
+import type { Deck, FocusLogEntry, FocusSample, GazeTracking, LapseTrigger, MemoryDecision, MemoryTopic, RescueContext, RescueOutcome, RescuePack, SessionConfig, SessionLog, Variant, VariantChoice } from '../contracts/types';
+import { notifyComeBack, playCue, primeCue, whenVisible, whenStudyActive } from '../lib/callback';
 import { getStream, releaseCamera, requestCamera, type CameraStatus } from '../lib/camera';
 import { plainText } from '../lib/demoDeck';
 import { devlog } from '../lib/devlog';
-import { hasStudyRecapContext, setScreenReading, stopScreenShare } from '../lib/screenShare';
+import { beginScreenAnalysis, finishScreenAnalysis, getLiveScreenScene, getScreenDiagnostics, getScreenTimeline, getStudyScreenContext, hasStudyRecapContext, setScreenReading } from '../lib/screenShare';
+import { historicalFocus } from '../screenStudy/timeline';
+import { ScreenIntervention, type ScreenRisk } from '../screenStudy/intervention';
 import { uid } from '../lib/storage';
+import { GazeTraceRecorder } from '../gazeTrace/recorder';
 import { memoryStyle } from '../providers/memory/adaptive';
 import { registry } from '../providers/registry';
 import { LocalAdaptiveProvider } from '../providers/local';
 import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI } from '../store';
 import { DEFAULT_CONFIG, configForSensitivity, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
 import { focusShare, scoreSession } from './metrics';
-import { DEFAULT_VARIANT, getPack } from './packs';
+import { clearPacks, DEFAULT_VARIANT, getPack } from './packs';
 
 const TICK_MS = 100;
 const SMOOTH_WINDOW_MS = 1000;
@@ -38,6 +41,9 @@ interface Pending {
 }
 
 interface Runtime {
+  screenGate: ScreenIntervention;
+  preparation?: ScreenPreparation;
+  screenWait?: AbortController;
   activity: NonNullable<SessionLog['activity']>;
   visitedSlides: Set<number>;
   sessionId: string;
@@ -48,6 +54,7 @@ interface Runtime {
   gazeTracking?: { t: number; value: GazeTracking };
   log: FocusLogEntry[];
   gazeDiagnostics: NonNullable<SessionLog['gazeDiagnostics']>;
+  gazeTrace?: GazeTraceRecorder;
   latestDiagnostic?: { t: number; value: NonNullable<FocusSample['gazeDiagnostic']> };
   outcomes: RescueOutcome[];
   pending: Pending[];
@@ -62,6 +69,18 @@ interface Runtime {
   timer: number | null;
   lastLogSec: number;
   titleBefore: string;
+}
+
+interface ScreenPreparation {
+  trigger: ScreenRisk;
+  deck: Deck;
+  slideIndex: number;
+  context: RescueContext;
+  choice?: VariantChoice;
+  pack?: RescuePack;
+  error?: string;
+  memoryDecision?: MemoryDecision;
+  memoryTopic?: MemoryTopic;
 }
 
 let rt: Runtime | null = null;
@@ -180,7 +199,7 @@ async function startSession() {
   const now = Date.now();
   const screenStudy = currentDeck().sourceType === 'screen';
   const adaptive: AdaptiveProvider = screenStudy && registry.config?.adaptive.mode === 'http'
-    ? new LocalAdaptiveProvider()
+    ? new LocalAdaptiveProvider(() => !!registry.config?.media.voiceUrl)
     : registry.adaptive;
   const memorySource = adaptive.retrieveMemory
     ? registry.isMock('attention') ? 'replay' : registry.attention.usesOffscreenRule ? 'live' : undefined
@@ -194,7 +213,7 @@ async function startSession() {
     actions.toast('Personal AI service is unreachable, using your own settings.', 'error');
   }
   // the user's own choice always wins over the model
-  cfg.nudgeOnly = !!s.settings.nudgeOnly || (!screenStudy && !registry.canRecap());
+  cfg.nudgeOnly = !!s.settings.nudgeOnly || !registry.canRecap();
 
   let profileMemo: string | undefined;
   try {
@@ -204,6 +223,7 @@ async function startSession() {
   }
 
   rt = {
+    screenGate: new ScreenIntervention(),
     sessionId: uid('s_'),
     machine: dispatch(createMachine(now), { type: 'start' }, now, cfg).m,
     cfg,
@@ -211,6 +231,7 @@ async function startSession() {
     offscreenLapseAt: null,
     log: [],
     gazeDiagnostics: { samples: [], droppedSamples: 0 },
+    gazeTrace: screenStudy ? new GazeTraceRecorder(now) : undefined,
     activity: [],
     visitedSlides: new Set(screenStudy ? [] : [s.slideIndex]),
     outcomes: [],
@@ -229,7 +250,7 @@ async function startSession() {
   };
   useApp.setState({ live: { ...emptyLive(), state: 'focused', startedAt: now, score: 80, effective: 80 }, rescue: null, breakCard: null });
 
-  if (screenStudy) setScreenReading(true);
+  if (screenStudy) { beginScreenAnalysis(now); setScreenReading(true); }
   await startAttention();
   if (!rt) return;
   rt.timer = window.setInterval(tick, TICK_MS);
@@ -270,6 +291,7 @@ function unsubscribe() {
 
 async function stopAttention(retainCalibration = false) {
   if (rt) {
+    rt.gazeTrace?.break();
     rt.samples = [];
     rt.offscreenLapseAt = null;
     rt.gazeTracking = undefined;
@@ -298,6 +320,9 @@ if (typeof window !== 'undefined') {
 
 async function teardown() {
   if (!rt) return;
+  cancelScreenPreparation();
+  clearPacks();
+  rt.screenWait?.abort();
   if (rt.timer !== null) clearInterval(rt.timer);
   rt.timer = null;
   cameraOff('off');
@@ -309,13 +334,19 @@ async function teardown() {
 export async function endSession() {
   if (!rt || ending) return;
   ending = true;
+  const endedAt = Date.now();
   setScreenReading(false);
-  stopScreenShare();
   const r = rt;
   try {
-    if (r.memorySource && useApp.getState().rescue) leaveRescue();
+    if (useApp.getState().rescue) leaveRescue();
     await teardown();
-    const now = Date.now();
+    if (currentDeck().sourceType === 'screen') {
+      useApp.setState({ finishingReport: true });
+      await finishScreenAnalysis();
+      const analysis = getScreenTimeline()?.analyze(endedAt);
+      if (analysis) r.log = historicalFocus(analysis, r.machine.sessionStart);
+    }
+    const now = endedAt;
     // Flush outcomes whose 60 s window hasn't closed: use what we have.
     for (const p of r.pending) finalizeOutcome(p, true);
     r.pending = [];
@@ -347,12 +378,28 @@ export async function endSession() {
     if (deck.sourceType !== 'screen' && log.samples.length >= 30 && log.attentionSource === 'gaze') actions.recordSession(deck, review.score.sustainedEpisodeMedianSec);
     // Runtime diagnostics stay in the local report, outside the adaptive-service payload.
     if (r.gazeDiagnostics.samples.length) log.gazeDiagnostics = r.gazeDiagnostics;
+    if (r.gazeTrace) log.gazeTrace = r.gazeTrace.trace;
+    if (deck.sourceType === 'screen') {
+      log.screenDiagnostics = getScreenDiagnostics();
+      log.screenAnalysis = getScreenTimeline()?.analyze(endedAt);
+      review.score = scoreSession(log.samples, log.rescues);
+      const measured = log.screenAnalysis?.summary;
+      if (measured) {
+        review.score.focusedMinutes = measured.focusedMs / 60_000;
+        review.score.onTaskShare = measured.measuredMs ? measured.focusedMs / measured.measuredMs : 0;
+        review.score.sustainedEpisodeMedianSec = measured.medianFocusMs / 1000;
+        const lapses = log.rescues.filter(rescue => rescue.context.trigger !== 'manual').length;
+        review.score.lapsesPer30Min = measured.measuredMs ? lapses * 1_800_000 / measured.measuredMs : 0;
+        if (measured.measuredMs > 0) log.attentionSource = 'gaze';
+      }
+    }
     const report = { deck, log, review, questions: r.questions };
     if (log.attentionSource === 'simulated' || deck.sourceType === 'demo' || deck.sourceType === 'screen') useApp.setState({ report });
     else await actions.saveReport(report);
     useApp.setState({ live: emptyLive(), rescue: null, breakCard: null });
     actions.go('report');
   } finally {
+    useApp.setState({ finishingReport: false });
     if (rt === r) rt = null;
     ending = false;
   }
@@ -366,11 +413,17 @@ export const isEnding = () => ending;
 function onSample(s: FocusSample) {
   if (!rt) return;
   const now = Date.now();
+  if (rt.gazeTrace && !ending) {
+    const state = useApp.getState();
+    getScreenTimeline()?.record(s, ['paused', 'break', 'idle', 'lapse', 'rescue'].includes(rt.machine.state)
+      || (state.live.noteTakingUntil ?? 0) > now, now);
+  }
+  if (!['paused', 'break', 'idle'].includes(rt.machine.state)) rt.gazeTrace?.record(s.gazeTrace, s.t, now);
   const fresh = Number.isFinite(s.t) && now - s.t >= 0 && now - s.t < GAZE_FRESH_MS;
   if (s.gazeTracking) {
     if (!fresh || (rt.gazeTracking && s.t <= rt.gazeTracking.t)) return;
     if (s.gazeDiagnostic) rt.latestDiagnostic = { t: s.t, value: s.gazeDiagnostic };
-    rt.gazeTracking = { t: s.t, value: s.gazeTracking };
+    rt.gazeTracking = { t: s.t, value: s.confidence < .3 ? { ...s.gazeTracking, state: 'unknown' } : s.gazeTracking };
     if (s.confidence < 0.3) {
       rt.samples = [];
       rt.offscreenLapseAt = null;
@@ -400,7 +453,7 @@ const windowActive = () => document.visibilityState === 'visible' && document.ha
 // ───────────────────────── tick ─────────────────────────
 
 function tick() {
-  if (!rt) return;
+  if (!rt || ending) return;
   const now = Date.now();
   const s = useApp.getState();
   const noteTaking = s.live.noteTakingUntil !== null && now < s.live.noteTakingUntil;
@@ -413,12 +466,15 @@ function tick() {
   const offscreenLapse = rt.offscreenLapseAt !== null && now - rt.offscreenLapseAt >= 0 && now - rt.offscreenLapseAt < GAZE_FRESH_MS;
   rt.offscreenLapseAt = null;
   const hasContext = !screenStudy || hasStudyRecapContext(now);
+  const screenControl = screenStudy ? updateScreenIntervention(now, noteTaking) : undefined;
   // For tab-only sessions, returning to the tab can reset the machine without creating a gaze sample.
   const controlScore = score ?? (registry.config?.attention.mode === 'off' ? rt.cfg.enterFocused : null);
   const res = step(rt.machine, {
     // Local gaze handles sustained closure through its validated non-focus dwell rule.
-    now, score: hasContext ? controlScore : null, windowActive: screenStudy || active, eyesClosed: provider.usesOffscreenRule ? false : eyesClosed, noteTaking,
-    offscreenRule: provider.usesOffscreenRule, offscreenLapse: hasContext && offscreenLapse,
+    now, score: screenStudy ? screenControl!.score : hasContext ? controlScore : null,
+    windowActive: screenStudy || active, eyesClosed: provider.usesOffscreenRule ? false : eyesClosed, noteTaking,
+    offscreenRule: screenStudy || provider.usesOffscreenRule, offscreenLapse: !screenStudy && hasContext && offscreenLapse,
+    screenLapse: screenControl?.trigger,
   }, rt.cfg);
   rt.machine = res.m;
   res.events.forEach(handle);
@@ -432,7 +488,8 @@ function tick() {
   const sec = Math.floor(sessionSec(now));
   if (sec !== rt.lastLogSec) {
     rt.lastLogSec = sec;
-    if (score !== null) rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
+    // Waiting for usable screen context is not a measured focused sample.
+    if (!screenStudy && score !== null && hasContext) rt.log.push({ t: sec, score: Math.round(m.effective), state: m.state, slideIndex: s.slideIndex });
     if (rt.latestDiagnostic && !['paused', 'break'].includes(m.state)) {
       const { t, value } = rt.latestDiagnostic;
       const diagnostic = now - t < GAZE_FRESH_MS ? value : { ...value, reason: 'stale_frame', rawOutside: null, confirmedOutside: null, eyeAspect: null, head: null, features: null, mappedGaze: null };
@@ -520,8 +577,131 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: () => T): Promise<T
 
 const hasQuiz = (r: RescueUI) => (r.pack?.script.quiz.length ?? 0) > 0 && (r.pack?.variant.quizCount ?? 1) > 0;
 
+function cancelScreenPreparation() {
+  if (!rt?.preparation) return;
+  getScreenTimeline()?.event('preparation-cancelled');
+  rt.preparation = undefined;
+  // Invalidate playback ownership. A same-topic cached render may finish for a later dwell.
+  useApp.setState({ live: { ...useApp.getState().live, recapPreparation: undefined } });
+}
+
+function updateScreenIntervention(now: number, noteTaking: boolean): { score: number | null; trigger?: ScreenRisk } {
+  if (!rt) return { score: null };
+  const state = useApp.getState();
+  if (state.rescue || ['lapse', 'rescue'].includes(rt.machine.state)) return { score: null };
+  const gaze = rt.gazeTracking;
+  const fresh = gaze && now >= gaze.t && now - gaze.t < GAZE_FRESH_MS;
+  const scene = getLiveScreenScene(now);
+  const active = !['paused', 'break', 'idle'].includes(rt.machine.state) && !noteTaking && state.screenReading !== 'stopped';
+  const available = active && fresh && gaze.value.state !== 'unknown';
+  const away = available && ['candidate', 'away'].includes(gaze.value.state);
+  const unrelated = available && gaze.value.state === 'screen' && scene?.status === 'ready' && scene.label === 'off-topic';
+  const recovered = available && gaze.value.state === 'screen' && hasStudyRecapContext(now);
+  const risk = away ? 'gaze' : unrelated ? 'content' : recovered ? null : 'unknown';
+  const gate = rt.screenGate.update(risk, now);
+  if (rt.preparation && (gate.recovered || !active)) cancelScreenPreparation();
+  if (gate.recovered && !rt.preparation && state.live.recapPreparation) {
+    useApp.setState({ live: { ...useApp.getState().live, recapPreparation: undefined } });
+  }
+  const canPrepare = !rt.cfg.nudgeOnly && now >= rt.machine.cooldownUntil;
+  if (gate.prepare && canPrepare && !rt.preparation) prepareScreenRescue(gate.risk!, now);
+  const score = away || unrelated ? 0 : recovered ? 100 : null;
+  return { score, trigger: gate.play && canPrepare && rt.preparation?.pack ? gate.risk! : undefined };
+}
+
+function prepareScreenRescue(trigger: ScreenRisk, now: number) {
+  if (!rt) return;
+  const source = getStudyScreenContext();
+  if (!source) {
+    useApp.setState({ live: { ...useApp.getState().live, recapPreparation: 'unavailable' } });
+    return;
+  }
+  const owner = rt;
+  const s = useApp.getState();
+  const context: RescueContext = {
+    userId: s.userId, deckId: source.deck.id, slideIndex: source.slideIndex,
+    minutesIntoSession: Math.round(s.live.elapsed / 6) / 10, lapseDepth: 1,
+    slideDifficulty: .5, trigger, rescueInRow: owner.machine.rescuesInRow + 1,
+    rescuesSoFar: owner.outcomes.length, recentVariantIds: owner.recentVariants.slice(-5), hourOfDay: new Date(now).getHours(),
+  };
+  const preparation: ScreenPreparation = { ...source, trigger, context };
+  owner.preparation = preparation;
+  getScreenTimeline()?.event('preparation-started', trigger, now);
+  useApp.setState({ live: { ...s.live, recapPreparation: 'preparing' } });
+  void (async () => {
+    try {
+      let choice: VariantChoice;
+      let memo = owner.profileMemo;
+      if (owner.adaptive.retrieveMemory && owner.memorySource) {
+        const slide = source.deck.slides[source.slideIndex];
+        preparation.memoryTopic = { deckTitle: source.deck.title.slice(0, 200),
+          slideTitle: slide.title.slice(0, 200), slideText: plainText(slide.text).slice(0, 360) };
+        const pending = [...owner.outcomes, ...owner.pending.map(p => p.outcome)].flatMap(outcome => {
+          const evidence = outcome.memoryEvidence;
+          return evidence && evidence.source === owner.memorySource && outcome.context.deckId === source.deck.id
+            ? [{ rescueId: outcome.rescueId, style: memoryStyle(evidence.variant) }] : [];
+        });
+        const result = await withTimeout(owner.adaptive.retrieveMemory(source.deck.id, owner.memorySource, s.settings,
+          { topic: preparation.memoryTopic, pending: pending.slice(-500), allowAnalogy: false }), 2300, () => undefined);
+        choice = result?.choice ?? { variant: fallbackVariant(), isHoldout: false };
+        memo = result?.memo ?? memo;
+        preparation.memoryDecision = result?.decision;
+      } else choice = await withTimeout<VariantChoice>(owner.adaptive.chooseVariant(context), 1500,
+        () => ({ variant: fallbackVariant(), isHoldout: false }));
+      if (rt !== owner || owner.preparation !== preparation || ending) return;
+      let variant = choice.variant;
+      if (!s.settings.roastsEnabled && variant.humourStyle === 'roasts') variant = { ...variant, humourStyle: 'memes' };
+      // Every screen recap includes a question before returning to study.
+      variant = { ...variant, quizCount: Math.max(1, variant.quizCount) as 1 | 2 };
+      preparation.choice = { ...choice, variant };
+      const pack = await getPack(source.deck, source.slideIndex, variant, 1, memo);
+      if (rt !== owner || owner.preparation !== preparation || ending) return;
+      if (!pack.script.quiz.length) throw new Error('The video service returned no review question.');
+      preparation.pack = pack;
+      getScreenTimeline()?.event('preparation-ready', trigger);
+      useApp.setState({ live: { ...useApp.getState().live, recapPreparation: 'ready' } });
+    } catch (error) {
+      if (rt !== owner || owner.preparation !== preparation || ending) return;
+      preparation.error = error instanceof Error ? error.message : 'Video preparation failed.';
+      getScreenTimeline()?.event('preparation-error', preparation.error);
+      useApp.setState({ live: { ...useApp.getState().live, recapPreparation: 'unavailable' } });
+      actions.toast(preparation.error, 'error');
+    }
+  })();
+}
+
+async function startScreenRescue() {
+  if (!rt?.preparation?.pack) { act({ type: 'rescueFinished', clipMs: 0 }); return; }
+  const owner = rt, preparation = rt.preparation;
+  const { context, trigger, pack, choice } = preparation;
+  const id = uid('r_');
+  const controller = new AbortController();
+  owner.screenWait?.abort(); owner.screenWait = controller;
+  getScreenTimeline()?.exclude(Date.now(), 'intervention');
+  useApp.setState({ rescue: { id, phase: 'loading', trigger, offscreen: trigger === 'gaze', depth: 1,
+    context, choice, pack, memoryDecision: preparation.memoryDecision, memoryTopic: preparation.memoryTopic,
+    lapseAt: Date.now(), skipped: false, answers: [] } });
+  getScreenTimeline()?.event('playback-requested', trigger);
+  let closeNote = () => {};
+  if (document.hidden || !document.hasFocus()) {
+    playCue(); closeNote = notifyComeBack(true);
+  }
+  const active = await whenStudyActive(controller.signal);
+  closeNote();
+  if (!active || rt !== owner || ending || useApp.getState().rescue?.id !== id) return;
+  act({ type: 'rescueStarted' });
+  const live = useApp.getState().live;
+  useApp.setState({ rescue: { ...useApp.getState().rescue!, phase: 'playing', startedAt: Date.now() },
+    live: { ...live, lapsesBySlide: { ...live.lapsesBySlide, [context.slideIndex]: (live.lapsesBySlide[context.slideIndex] ?? 0) + 1 } } });
+  getScreenTimeline()?.event('playback-started', trigger);
+}
+
 async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: number, offscreen: boolean) {
   if (!rt) return;
+  if (currentDeck().sourceType === 'screen') {
+    await startScreenRescue();
+    return;
+  }
   const owner = rt;
   const lapseAt = Date.now();
   const screenStudy = currentDeck().sourceType === 'screen';
@@ -675,6 +855,7 @@ export function playbackStarted() {
 export function clipEnded() {
   const r = useApp.getState().rescue;
   if (!r || r.phase !== 'playing') return;
+  if (rt?.gazeTrace) getScreenTimeline()?.event('quiz-started');
   if (hasQuiz(r)) useApp.setState({ rescue: { ...r, clipEndedAt: Date.now(), phase: 'quiz' } });
   else {
     useApp.setState({ rescue: { ...r, clipEndedAt: Date.now() } });
@@ -717,6 +898,14 @@ export function answerQuiz(questionIndex: number, chosen: number) {
 export function finishRescue() {
   const r = useApp.getState().rescue;
   if (!r || !rt) return;
+  if (rt.gazeTrace) {
+    getScreenTimeline()?.resume(Date.now());
+    rt.screenWait?.abort();
+    rt.preparation = undefined;
+    rt.screenGate = new ScreenIntervention();
+    getScreenTimeline()?.event('returned-to-study');
+    useApp.setState({ live: { ...useApp.getState().live, recapPreparation: undefined } });
+  }
   if (!r.pack || r.phase === 'error' || r.awaitingPlayback) {
     useApp.setState({ rescue: null });
     act({ type: 'rescueFinished', clipMs: 0 });
@@ -799,13 +988,18 @@ function finalizeOutcome(p: Pending, partial: boolean) {
 /** Pause: tracking stops and the camera goes fully off. */
 async function pause(retainCalibration = true) {
   if (!rt) return;
+  cancelScreenPreparation();
+  rt.screenWait?.abort();
   if (rt.machine.state !== 'paused') {
     if (useApp.getState().rescue) leaveRescue();
     act({ type: 'pause' });
   } else if (retainCalibration) {
     return;
   }
-  if (currentDeck().sourceType === 'screen') setScreenReading(false);
+  if (currentDeck().sourceType === 'screen') {
+    getScreenTimeline()?.exclude(Date.now(), 'paused');
+    setScreenReading(false);
+  }
   const stopping = stopAttention(retainCalibration);
   cameraOff('paused');
   await stopping;
@@ -822,7 +1016,10 @@ async function resume() {
   if (rt !== session || ending) return;
   await startAttention();
   if (rt === session && !ending) {
-    if (currentDeck().sourceType === 'screen') setScreenReading(true);
+    if (currentDeck().sourceType === 'screen') {
+      getScreenTimeline()?.resume(Date.now());
+      setScreenReading(true);
+    }
     act({ type: 'resume' });
   }
 }

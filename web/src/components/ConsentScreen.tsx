@@ -4,7 +4,7 @@ import { registry } from '../providers/registry';
 import { actions } from '../store';
 
 /** Bump when what is measured or kept changes: everyone sees the screen again. */
-export const CONSENT_VERSION = '2026-11-v7';
+export const CONSENT_VERSION = '2026-11-v9';
 
 /**
  * First-run consent, in plain language: what LockIn measures, what it keeps,
@@ -32,7 +32,7 @@ export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }
           <div>
             <dt className="font-semibold">What LockIn measures</dt>
             <dd className="mt-1 text-graphite">
-              {screenStudy ? 'LockIn reads visible text and checks it against your goal on this Mac. With the camera calibrated, LockIn also estimates whether you are looking at the display.' : usesCamera
+              {screenStudy ? 'LockIn reads visible text and checks it against your goal on this computer. With the camera calibrated, LockIn also estimates whether you are looking at the display and records an estimated gaze trajectory.' : usesCamera
                 ? 'About ten times a second, your webcam is used to estimate whether your eyes are on the slide. LockIn also notices when you switch to another tab or app.'
                 : registry.config.attention.mode === 'off'
                   ? 'Study time, slides visited, and whether this tab is active. Gaze tracking is not connected, so this session will not estimate your attention.'
@@ -43,20 +43,21 @@ export function ConsentScreen({ screenStudy = false }: { screenStudy?: boolean }
             <dt className="font-semibold">What it keeps</dt>
             <dd className="mt-1 text-graphite">
               {screenStudy
-                ? 'The visible text and activity labels are used for this session. The local memory bank can keep recap outcomes and a short text excerpt when enabled.'
+                ? 'The downloaded report includes recognized screen text, text-region coordinates, activity labels, gaze coordinates, timestamps and calibration geometry. Screenshots are held briefly for local analysis and discarded. Gaze coordinates are not sent to recap services. When enabled, the local memory bank keeps recap outcomes and a short study-text excerpt.'
                 : 'Your uploaded PDFs and completed reports are saved in this browser. Reports include focus measurements when available. The local memory bank can keep recap outcomes and a short text excerpt when enabled.'}
             </dd>
           </div>
           {registry.attention.calibrationModel && (
             <div>
               <dt className="font-semibold">Camera calibration</dt>
-              <dd className="mt-1 text-graphite">This Mac keeps a diagnostic file with calibration progress, sample counts and validation errors.</dd>
+              <dd className="mt-1 text-graphite">This computer keeps a diagnostic file with calibration progress, sample counts and validation errors.</dd>
             </div>
           )}
           <div>
             <dt className="font-semibold">Frames and recap services</dt>
             <dd className="mt-1 text-graphite">
               Camera frames {screenStudy && 'and shared screen frames '}are processed on this computer and discarded.
+              {screenStudy && recaps && ' After signs of distraction persist, connected recap services receive the last study-related text to prepare a video and question. Your configured writer and narration services may run on another computer.'}
               {!screenStudy && recaps && ' When a recap starts, connected recap services receive the selected slide’s text and may receive a short study history summary. Paging through slides does not send their text. A connected personalization service may receive session measurements and quiz answers.'}
             </dd>
           </div>

@@ -31,6 +31,8 @@ Scanned/image-only PDFs remain readable but need OCR before text-based recaps.
 
 For local video generation, start the [recap studio](../media/docs/LOCAL_RECAPS.md), then open **Settings → Local video recaps**. Connect the narration API there. **View saved videos** opens the studio’s local library.
 
+For cross-app study on Windows, use the [shared-screen setup and full-flow checklist](docs/SCREEN_STUDY_FLOW.md). It covers local OCR/relevance, real video preparation, gaze calibration and timestamped reports.
+
 For the existing all-in-one API, open **Settings → Single-server AI connection**, paste your local or hosted LockIn API base
 address, and choose **Test and save**. The app checks model readiness and saves
 the address in this browser, including in production builds. No rebuild is
@@ -91,8 +93,9 @@ Downloaded reports include `log.gazeDiagnostics`: numeric 1 Hz observations, dec
 timer resets and rule version. The latest 7200 entries are retained with a dropped-entry count; no camera images are stored.
 These diagnostics are attached locally after the adaptive-service request.
 
-Reports label the median measured focus stretch, show the longest measured stretch
-and measured active time, and break timeline paths across missing observations.
+Reports headline the longest measured focus stretch, keep the median and its
+baseline comparison as secondary statistics, show measured active time, and
+break timeline paths across missing observations.
 Missing measurements are neither focused nor unfocused time.
 
 Run **Integrations → Run contract check** during a calibrated session to inspect
@@ -191,6 +194,11 @@ exclusions and style rotation after page reloads. It uses the Playwright options
 
 ### Study from a shared screen
 
+For Windows CPU OCR setup, startup commands, and a manual checklist, see
+[Local screen OCR](../gaze-demo/docs/SCREEN_OCR.md). The PaddleOCR launcher uses
+local PP-OCRv5 mobile models for Chinese and English. It is separate from the
+optional activity classifier and the webcam gaze provider.
+
 Run the local backend with `gaze-demo/scripts/start-backend.sh` and open
 the Web demo in desktop Chrome. Choose **Share your screen**, then select a
 learning tab, window, or display in Chrome's picker. A full-display or
@@ -204,9 +212,10 @@ excerpt when a recap is recorded. OCR handles visible text, including
 Chinese and English. Gaze indicates whether you are looking at the
 calibrated display.
 
-To replay synthetic shared content through real local OCR with a simulated
-gaze signal, start the Web app with `npm run dev:demo` and run `node web/scripts/replay-screen-study.mjs` from the
-repository root with the backend running.
+For a controlled-gaze replay through real OCR and relevance, use
+`node web/scripts/replay-screen-flow.mjs` after the real-service verification in
+[the Windows flow checklist](docs/SCREEN_STUDY_FLOW.md). This checks actual MP4
+playback, questions and report export for both gaze and off-topic interventions.
 
 ### Calibration diagnostics
 
@@ -316,10 +325,10 @@ Read **[docs/INTEGRATION.md](docs/INTEGRATION.md)**. In short:
 
 | Team | Implement | Connect via |
 |---|---|---|
-| 視線追蹤 Gaze tracking | `AttentionProvider` | WebSocket, or an in-browser plugin |
-| AI 分析 AI analysis | `ContentProvider` | HTTP |
-| 做影片 Video | `MediaProvider` | HTTP |
-| 個人化 AI Personal AI | `AdaptiveProvider` | HTTP |
+| Gaze tracking | `AttentionProvider` | WebSocket, or an in-browser plugin |
+| AI analysis | `ContentProvider` | HTTP |
+| Video | `MediaProvider` | HTTP |
+| Personal AI | `AdaptiveProvider` | HTTP |
 
 Press `` ` `` in the app for the **Integrations** panel. There you switch your
 module from local/off to your service, run a contract check that names any bad
@@ -361,6 +370,8 @@ examples/            FastAPI + WebSocket stubs for each team
 ```
 
 ## Scripts
+
+Shared-screen gaze trajectories: [implementation and test checklist](docs/GAZE_TRACE.md).
 
 | | |
 |---|---|

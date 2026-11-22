@@ -113,7 +113,7 @@ function TeamCard({ team, mode, url }: { team: ServiceTeam; mode: string; url: s
       <div className="flex items-center gap-2">
         <span className="h-2 w-2 flex-none rounded-full" style={{ background: dot }} aria-hidden />
         <h3 className="text-[14px] font-semibold" style={{ fontFamily: 'var(--font-body)', fontVariationSettings: 'normal', letterSpacing: 0 }}>
-          {info.title} <span className="font-normal text-pencil">{info.zh}</span>
+          {info.title}
         </h3>
         <span className="flex-1" />
         <label className="sr-only" htmlFor={`mode-${team}`}>

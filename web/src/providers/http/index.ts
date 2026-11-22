@@ -25,7 +25,7 @@ import { assertContract, checkChoice, checkDeck, checkMedia, checkReview, checkS
 import { call, resolveUrl } from './client';
 import { DEMO_MODE } from '../../lib/features';
 
-// ───────── AI 分析 ─────────
+// ───────── AI analysis ─────────
 export class HttpContentProvider implements ContentProvider {
   readonly name: string;
   constructor(private base: string) {
@@ -68,7 +68,7 @@ export class HttpContentProvider implements ContentProvider {
   }
 }
 
-// ───────── 做影片 ─────────
+// ───────── Video ─────────
 export class HttpMediaProvider implements MediaProvider {
   readonly name: string;
   get compiled() { return !!this.voiceUrl; }
@@ -101,7 +101,7 @@ export class HttpMediaProvider implements MediaProvider {
   }
 }
 
-// ───────── 個人化 AI ─────────
+// ───────── Personal AI ─────────
 export class HttpAdaptiveProvider implements AdaptiveProvider {
   readonly name: string;
   constructor(private base: string) {

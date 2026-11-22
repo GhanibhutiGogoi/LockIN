@@ -1,5 +1,6 @@
 import base64
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -128,14 +129,11 @@ def test_connection_names_missing_ffmpeg_capabilities(
     tmp_path, monkeypatch, filters, encoders, missing
 ):
     monkeypatch.setenv("LOCKIN_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("PATH", str(tmp_path))
-    ffmpeg = tmp_path / "ffmpeg"
-    ffmpeg.write_text(
-        '#!/bin/sh\ncase "$2" in\n'
-        f"-filters) echo '{filters}' ;;\n-encoders) echo '{encoders}' ;;\n*) exit 1 ;;\nesac\n"
-    )
-    ffmpeg.chmod(0o755)
-    (tmp_path / "ffprobe").symlink_to(ffmpeg)
+    from lockin_media import compose_recap
+
+    monkeypatch.setattr(compose_recap.shutil, "which", lambda name: name)
+    monkeypatch.setattr(compose_recap.subprocess, "run", lambda args, **kwargs:
+                        SimpleNamespace(stdout=filters if args[-1] == "-filters" else encoders))
     monkeypatch.setattr(studio.Writer, "check", lambda self: None)
     monkeypatch.setattr(studio.Store, "starter", lambda self, kind: [{"id": "fixture"}])
 
@@ -151,3 +149,32 @@ def test_connection_names_missing_ffmpeg_capabilities(
             assert all(item in result.json()["detail"] for item in missing)
         else:
             assert result.status_code == 200
+
+
+def test_studio_accepts_windows_gaze_origin(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCKIN_DATA_DIR", str(tmp_path))
+    client = TestClient(studio.create_app(), base_url="http://127.0.0.1")
+    response = client.get("/recaps", headers={"Origin": "http://127.0.0.1:5181"})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5181"
+
+
+def test_cli_writer_uses_utf8_for_chinese_source_and_output(monkeypatch):
+    from pathlib import Path
+    from lockin_media import script_writer
+
+    monkeypatch.setattr(script_writer.Writer, "check", lambda self: None)
+    draft = {"hook": "A surprise!", "script": "The median splits the data.",
+             "plain_summary": "中位数", "quiz": []}
+
+    def run(command, **kwargs):
+        assert kwargs["encoding"] == "utf-8"
+        assert "数据" in kwargs["input"]
+        (Path(kwargs["cwd"]) / "result.txt").write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(script_writer.subprocess, "run", run)
+    req = script_writer.ScriptRequest.model_validate({
+        "slide": {"text": "数据中的中位数", "title": "Data"}, "variant": {"quiz_count": 0}})
+    result = script_writer.write_script(script_writer.Writer(provider="codex"), req, {})
+    assert result["plain_summary"] == "中位数"

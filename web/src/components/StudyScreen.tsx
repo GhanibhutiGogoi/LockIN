@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { shareStudyScreen, stopScreenShare } from '../lib/screenShare';
 import { simulator } from '../providers/mock/attention';
 import { registry } from '../providers/registry';
-import { dismissBreak, endBreak, endSession, enterStudy, isRunning, onSlideChange, requestRecap, takeBreak, togglePause } from '../session/engine';
+import { dismissBreak, endBreak, endSession, enterStudy, isRunning, onSlideChange, requestRecap, takeBreak, toggleNoteTaking, togglePause } from '../session/engine';
 import { actions, useApp, useDeck } from '../store';
 import { CONSENT_VERSION, ConsentScreen } from './ConsentScreen';
 import { FocusGauge } from './FocusGauge';
@@ -178,6 +178,9 @@ export function StudyScreen() {
 }
 
 function ScreenStudyPanel({ text }: { text?: string }) {
+  const preparation = useApp(s => s.live.recapPreparation);
+  const takingNotes = useApp(s => s.live.noteTakingUntil !== null);
+  const ocr = useApp((s) => s.screenOcr);
   const status = useApp((s) => s.screenReading);
   const goal = useApp((s) => s.screenGoal);
   const activity = useApp((s) => s.screenActivity);
@@ -194,7 +197,7 @@ function ScreenStudyPanel({ text }: { text?: string }) {
     reading: 'Waiting for text from your shared screen.',
     ready: 'Reading your shared screen',
     'no-text': 'No readable text on the shared screen.',
-    'on-lockin': 'Return to your study window to keep reading the shared screen.',
+    'on-lockin': 'Screen reading is paused while LockIn has focus. Click your shared study window to continue.',
     paused: 'Screen reading paused',
     stopped: 'Screen sharing stopped',
     error: 'Screen text recognition is unavailable. Check the local backend.',
@@ -204,6 +207,13 @@ function ScreenStudyPanel({ text }: { text?: string }) {
     <section className="mx-auto mt-10 flex max-h-full w-full max-w-2xl flex-col overflow-y-auto rounded-2xl bg-sheet p-6 sm:mt-16 sm:p-9" aria-labelledby="screen-study-title">
       <h1 id="screen-study-title" className="text-[clamp(24px,3vw,36px)] font-semibold">LockIn Screen Study</h1>
       <p role="status" className="mt-3 text-[17px] text-graphite">{label}</p>
+      {!registry.canRecap() && <p className="mt-2 text-sm text-graphite">Connect narration in Settings → Local video recaps before starting a session with video reminders.</p>}
+      {preparation && <p className="mt-2 text-sm text-graphite" data-recap-preparation={preparation}>
+        {preparation === 'preparing' ? 'Preparing a recap of your study material. Keep studying to cancel the reminder.'
+          : preparation === 'ready' ? 'Recap ready. It will only interrupt a sustained distraction.'
+          : 'A recap needs readable study-related text and a connected video service.'}
+      </p>}
+      {ocr && <p className="mt-2 text-[14px] text-graphite" data-screen-ocr>{ocr.message}</p>}
       {goal && (
         <dl className="mt-5 grid gap-2 text-[15px]">
           <div className="break-words"><dt className="inline font-semibold">Study goal</dt>{' '}<dd className="inline text-graphite">{goal}</dd></div>
@@ -228,11 +238,16 @@ function ScreenStudyPanel({ text }: { text?: string }) {
       >
         {stopped ? 'Share a screen' : 'Stop sharing'}
       </button>
+      {!stopped && <button type="button" className="btn btn-quiet btn-sm mt-2 self-start" aria-pressed={takingNotes} onClick={toggleNoteTaking}>
+        {takingNotes ? 'Resume gaze reminders' : 'Taking notes'}
+      </button>}
+      {takingNotes && <p className="mt-2 text-sm text-graphite">Looking down for notes is allowed for 60 seconds. This time is excluded from focus measurements.</p>}
     </section>
   );
 }
 
 function FinishPopover({ onCancel }: { onCancel: () => void }) {
+  const finishing = useApp(s => s.finishingReport);
   const elapsed = useApp((s) => s.live.elapsed);
   const m = Math.floor(elapsed / 60);
   const sec = Math.floor(elapsed % 60);
@@ -254,10 +269,11 @@ function FinishPopover({ onCancel }: { onCancel: () => void }) {
         <button type="button" className="btn btn-primary btn-sm flex-1" onClick={() => void finish()} disabled={busy} aria-busy={busy} autoFocus>
           {busy ? 'Making your report…' : 'See my report'}
         </button>
-        <button type="button" className="btn btn-quiet btn-sm" onClick={onCancel}>
+        <button type="button" className="btn btn-quiet btn-sm" onClick={onCancel} disabled={busy}>
           Keep going
         </button>
       </div>
+      {finishing && <p role="status" className="mt-3 text-sm text-graphite">Finishing queued screen analysis. The camera and screen capture are off. This may take up to 45 seconds.</p>}
     </div>
   );
 }

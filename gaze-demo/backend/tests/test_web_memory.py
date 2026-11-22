@@ -14,7 +14,8 @@ def identity(client):
     return {'Authorization': 'Bearer ' + response.json()['token']}
 
 
-def test_web_memory_round_trip_isolated_idempotent_and_deletable(tmp_path):
+@pytest.mark.parametrize('trigger', ['gaze', 'content'])
+def test_web_memory_round_trip_isolated_idempotent_and_deletable(tmp_path, trigger):
     with TestClient(create_app(tmp_path / 'web.sqlite', memory=Memory())) as client:
         a, b = identity(client), identity(client)
         query = {'deck_id': 'biology', 'source': 'replay'}
@@ -22,7 +23,7 @@ def test_web_memory_round_trip_isolated_idempotent_and_deletable(tmp_path):
         assert client.post(BASE + '/retrieve', headers=a, json=query).json()['evidence_count'] == 0
         outcome = {
             'rescue_id': 'rescue-1', 'session_id': 'first', 'deck_id': 'biology',
-            'trigger': 'gaze', 'style': 'analogy', 'clip_seconds': 20, 'skipped': False,
+            'trigger': trigger, 'style': 'analogy', 'clip_seconds': 20, 'skipped': False,
             'answer_count': 1, 'correct_count': 1, 'source': 'replay',
             'recovery_samples': 55, 'focused_share': .8,
         }

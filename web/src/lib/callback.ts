@@ -112,3 +112,20 @@ export function whenVisible(): Promise<void> {
     document.addEventListener('visibilitychange', on);
   });
 }
+
+/** External apps do not necessarily hide the browser tab. Wait for actual focus. */
+export function whenStudyActive(signal: AbortSignal): Promise<boolean> {
+  return new Promise(resolve => {
+    const check = () => {
+      if (!signal.aborted && (document.hidden || !document.hasFocus())) return;
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('focus', check);
+      signal.removeEventListener('abort', check);
+      resolve(!signal.aborted);
+    };
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('focus', check);
+    signal.addEventListener('abort', check, { once: true });
+    check();
+  });
+}

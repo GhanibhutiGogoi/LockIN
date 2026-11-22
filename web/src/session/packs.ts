@@ -10,14 +10,10 @@
  */
 import { DEFAULT_VARIANT } from '../contracts/defaults';
 import type { Deck, RescueMedia, RescuePack, RescueScript, Variant } from '../contracts/types';
-import { MockContentProvider } from '../providers/mock/content';
-import { MockMediaProvider } from '../providers/mock/media';
 import { registry } from '../providers/registry';
 
 export { DEFAULT_VARIANT };
 
-const screenContent = new MockContentProvider();
-export const screenRecapMedia = new MockMediaProvider();
 
 function newCache() {
   return {
@@ -46,11 +42,6 @@ function cached<T>(map: Map<string, Promise<T>>, k: string, make: () => Promise<
 export async function getPack(deck: Deck, slideIndex: number, variant: Variant, depth: 1 | 2, profileMemo?: string): Promise<RescuePack> {
   const slide = deck.slides[slideIndex];
   if (!slide?.text.trim()) throw new Error('This slide has no readable text. Use a PDF with selectable text for AI recaps.');
-  if (deck.sourceType === 'screen') {
-    const script = await screenContent.getScript({ deck, slide, variant, depth });
-    const media = await screenRecapMedia.renderMedia({ script, variant });
-    return { deckId: deck.id, slideIndex, variant, script, media };
-  }
   // Bind both providers and cache maps before awaiting anything. An old
   // response can never select a replacement provider or populate its cache.
   const owner = cache;
@@ -60,11 +51,15 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
   const assertCurrent = () => {
     if (owner !== cache || signal.aborted) throw new Error('The AI connection changed. Request this recap again.');
   };
-  const baseKey = scriptKey(deck.id, slideIndex, variant, depth, profileMemo);
+  // Screen moments are observations, not new topics. Keep PDF slide identity intact.
+  const identity = deck.sourceType === 'screen'
+    ? JSON.stringify([deck.id, slide.text.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim()]) : deck.id;
+  const cacheSlide = deck.sourceType === 'screen' ? 0 : slideIndex;
+  const baseKey = scriptKey(identity, cacheSlide, variant, depth, profileMemo);
   const sk = mediaProvider.compiled ? JSON.stringify([baseKey, variant.pacing, variant.gameplayType]) : baseKey;
   const script = await cached(owner.scripts, sk, () => content.getScript({ deck, slide, variant, profileMemo, depth }, { signal }));
   assertCurrent();
-  const audioKey = mediaKey(deck.id, slideIndex, variant, depth, profileMemo);
+  const audioKey = mediaKey(identity, cacheSlide, variant, depth, profileMemo);
   const key = mediaProvider.compiled ? JSON.stringify([audioKey, variant.gameplayType]) : audioKey;
   const media = await cached(owner.medias, key, () => mediaProvider.renderMedia({ deckId: deck.id, slideIndex, script, variant }, { signal }));
   assertCurrent();

@@ -1,6 +1,8 @@
 import { GazeCapture, type GazeObservation, type TrackerCalibrationDiagnostics } from '../../../../gaze-demo/backend/static/gaze.js';
 import type { AttentionProvider, AttentionStatus, CalibrationTarget } from '../../contracts/providers';
 import type { FocusSample } from '../../contracts/types';
+import { readTraceGeometry, changedGeometry } from '../../gazeTrace/geometry';
+import type { TraceCalibration } from '../../gazeTrace/types';
 
 export class LocalGazeProvider implements AttentionProvider {
   readonly name: string;
@@ -9,6 +11,9 @@ export class LocalGazeProvider implements AttentionProvider {
     this.name = calibrationModel === 'eyetheia' ? 'EyeTheia + MediaPipe' : 'BlazeGaze + MediaPipe';
   }
   private capture: GazeCapture | null = null;
+  private traceCalibration: TraceCalibration | null = null;
+  private traceGeometryChanged = false;
+  private screenStudy = false;
   private startupDiagnostics: TrackerCalibrationDiagnostics | null = null;
   private skipped = false;
   private reportedIssue: string | null = null;
@@ -32,7 +37,8 @@ export class LocalGazeProvider implements AttentionProvider {
     return !this.skipped && !this.capture?.calibrated;
   }
 
-  prepareCalibration() {
+  prepareCalibration(options?: { screenStudy?: boolean }) {
+    this.screenStudy = !!options?.screenStudy;
     this.skipped = false;
     this.startupDiagnostics = null;
   }
@@ -119,6 +125,7 @@ export class LocalGazeProvider implements AttentionProvider {
   }
 
   async stop() {
+    this.traceCalibration = null;
     this.lifecycle++;
     this.fallback = undefined;
     this.startup?.reject(new Error('Gaze tracking stopped.'));
@@ -141,6 +148,7 @@ export class LocalGazeProvider implements AttentionProvider {
   }
 
   async calibrate(show: (target: CalibrationTarget | null) => void, signal: AbortSignal) {
+    this.traceCalibration = null;
     signal.throwIfAborted();
     const capture = this.capture;
     if (!capture?.ready) throw new Error('Start the camera and wait for the gaze model to load.');
@@ -162,7 +170,7 @@ export class LocalGazeProvider implements AttentionProvider {
       let quick = capture.canRecheck;
       const startFull = () => {
         quick = false;
-        try { capture.calibrate(); }
+        try { capture.calibrate({ screen: this.screenStudy }); }
         catch (error) { finish(error as Error); }
       };
       const retryFull = () => {
@@ -179,6 +187,12 @@ export class LocalGazeProvider implements AttentionProvider {
         finish(error as Error);
       }
     });
+    this.traceCalibration = {
+      id: crypto.randomUUID(), at: Date.now(), model: this.calibrationModel,
+      geometry: readTraceGeometry(), validation: capture.calibrationDiagnostics().validation,
+      coordinateSpace: capture.calibrationSpace ?? 'viewport',
+    };
+    this.traceGeometryChanged = false;
   }
 
   calibrationDiagnostics() {
@@ -236,9 +250,24 @@ export class LocalGazeProvider implements AttentionProvider {
         returnMs: offscreen.return_ms,
       },
     };
+    const calibration = this.traceCalibration;
+    if (calibration) {
+      const geometry = readTraceGeometry();
+      this.traceGeometryChanged ||= changedGeometry(calibration.geometry, geometry, calibration.coordinateSpace).length > 0;
+      const mapped = diagnostic?.mappedGaze;
+      const traceValid = valid && Number.isFinite(sample.x) && Number.isFinite(sample.y)
+        && sample.eyes_open !== false && !!diagnostic?.face && !!diagnostic?.eyesOpen && !this.traceGeometryChanged;
+      result.gazeTrace = {
+        calibration, geometry,
+        raw: mapped?.length === 2 ? { x: mapped[0] + 0.5, y: mapped[1] + 0.5 } : null,
+        valid: traceValid,
+        reason: this.traceGeometryChanged ? 'geometry_changed' : sample.reason ?? diagnostic?.reason ?? 'unavailable',
+      };
+    }
     if (valid) {
       result.signals = { gaze: Number(focused), eyesOpen: sample.eyes_open === false ? 0 : 1, facePresent: 1 };
-      if (sample.on_screen && sample.x !== null && sample.y !== null) {
+      // The legacy point contract is viewport-relative, not fixed-screen.
+      if (calibration?.coordinateSpace !== 'screen' && sample.on_screen && sample.x !== null && sample.y !== null) {
         const x = sample.x + 0.5;
         const y = sample.y + 0.5;
         if (x >= 0 && x <= 1 && y >= 0 && y <= 1) result.gazePoint = { x, y };

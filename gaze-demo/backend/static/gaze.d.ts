@@ -100,7 +100,8 @@ export class GazeCapture {
   suspend(): boolean;
   resume(stream: MediaStream): Promise<boolean>;
   revalidate(): boolean;
-  calibrate(): void;
+  readonly calibrationSpace: 'screen' | 'viewport';
+  calibrate(options?: { screen?: boolean }): void;
   startCalibrationStage(): void;
   resetDiagnosticFrames(): void;
   calibrationDiagnostics(): TrackerCalibrationDiagnostics;
