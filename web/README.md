@@ -29,7 +29,9 @@ unavailable. With both connected, **Recap slide** works without a gaze tracker;
 automatic recaps can also respond to app switches or real gaze measurements.
 Scanned/image-only PDFs remain readable but need OCR before text-based recaps.
 
-Open **Settings → AI connection**, paste your local or hosted LockIn API base
+For local video generation, start the [recap studio](../media/docs/LOCAL_RECAPS.md), then open **Settings → Local video recaps**. Connect the narration API there. **View saved videos** opens the studio’s local library.
+
+For the existing all-in-one API, open **Settings → Single-server AI connection**, paste your local or hosted LockIn API base
 address, and choose **Test and save**. The app checks model readiness and saves
 the address in this browser, including in production builds. No rebuild is
 needed. Use `http://127.0.0.1:8011/` locally or through an SSH tunnel, or an HTTPS

@@ -10,6 +10,8 @@ The GPU runtimes and Docker images have not yet been validated on our hardware.
 The scripts are supplied and tested without downloading or running the models.
 The initial placement is four 32 GB cards; 128 GB total VRAM is not pooled.
 
+See the [media library catalog](MEDIA_LIBRARY.md) for asset sizes, source links and credits.
+
 ## Files provided
 
 All scripts accept `--dry-run` and work regardless of your current directory.
@@ -17,7 +19,8 @@ All scripts accept `--dry-run` and work regardless of your current directory.
 | Script under `media/scripts/` | What it does |
 | --- | --- |
 | `setup-system.sh` | Install Ubuntu/Debian prerequisites with apt; no NVIDIA driver changes |
-| `setup.sh api` | Create the Python 3.12 API environment; bootstrap pinned uv if absent |
+| `setup.sh api` | Create the API environment and install the starter gameplay and music libraries |
+| `download-library.sh` | Verify the starter library and download missing or corrupt files |
 | `setup.sh all` | Also install isolated Fish, LTX and alignment runtimes at pinned revisions |
 | `download-models.sh all` | Download pinned voice, video and alignment weights; rerunnable/resumable |
 | `generate-video.sh` | Print a video job plan; add `--execute` to generate a candidate |

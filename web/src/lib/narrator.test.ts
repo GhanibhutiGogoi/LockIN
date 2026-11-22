@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { estimateCaptions } from '../providers/mock/media';
 import { narrate } from './narrator';
@@ -72,6 +73,35 @@ describe('narrator mute', () => {
 });
 
 describe('audio narration', () => {
+  it('uses the compiled video clock and stops the supplied player', async () => {
+    const player = document.createElement('video');
+    const play = vi.spyOn(player, 'play').mockResolvedValue();
+    const pause = vi.spyOn(player, 'pause').mockImplementation(() => {});
+    const onPlaying = vi.fn();
+    const n = narrate(media(), text, { voiceId: 'hype', pacing: 1 }, false, { onPlaying }, player);
+    await Promise.resolve();
+    expect(play).toHaveBeenCalledOnce();
+    expect(onPlaying).toHaveBeenCalledOnce();
+    player.currentTime = 4;
+    expect(n.time()).toBe(4);
+    n.setMuted(true);
+    expect(player.muted).toBe(true);
+    n.stop();
+    await n.done;
+    expect(pause).toHaveBeenCalledOnce();
+    expect(spoken).toHaveLength(0);
+  });
+
+  it('keeps screen narration local even when a media player is supplied', () => {
+    const player = document.createElement('video');
+    const play = vi.spyOn(player, 'play').mockResolvedValue();
+    const n = narrate({ ...media(), audioUrl: '/recap.mp3' }, text,
+      { voiceId: 'hype', pacing: 1 }, false, { localOnly: true }, player);
+    expect(play).not.toHaveBeenCalled();
+    expect(spoken).toHaveLength(1);
+    n.stop();
+  });
+
   it('keeps blocked audio pending, allows another manual attempt, and cannot restart after stop', async () => {
     class BlockedAudio {
       muted = false;

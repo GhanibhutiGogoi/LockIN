@@ -121,6 +121,8 @@ export interface ContentProvider {
 // ───────────────────────── Media generation ─────────────────────────
 
 export interface MediaProvider {
+  /** True when the returned MP4 already includes the selected gameplay. */
+  readonly compiled?: boolean;
   readonly name: string;
   /** TTS + forced-aligned captions + key-term b-roll for a script. */
   renderMedia(args: {

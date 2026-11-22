@@ -9,7 +9,7 @@ export function AIConnectionSettings() {
   // Subscribe so finishing a session also releases the connection controls.
   useApp((s) => s.screen);
   const running = isRunning();
-  const connected = config.media.mode === 'http';
+  const connected = config.media.mode === 'http' && !config.media.voiceUrl;
   const [url, setUrl] = useState(connected ? config.media.url : '');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');

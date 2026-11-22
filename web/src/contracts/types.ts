@@ -46,7 +46,7 @@ export interface Deck {
 
 export type SlangLevel = 'plain' | 'mild' | 'unhinged';
 export type HumourStyle = 'memes' | 'analogies' | 'roasts';
-export type ClipSeconds = 20 | 40 | 60;
+export type ClipSeconds = 20 | 30 | 40 | 60;
 
 /** One combination of the "knobs" from the proposal. */
 export interface Variant {
@@ -82,6 +82,9 @@ export interface KeyTerm {
 
 /** Matches the "Output schema" JSON in the proposal. */
 export interface RescueScript {
+  /** Local catalog choices for a compiled recap. */
+  gameplayId?: string;
+  musicId?: string;
   variant: Pick<Variant, 'targetSeconds' | 'slangLevel' | 'humourStyle'>;
   hook: string;
   script: string;
@@ -119,6 +122,8 @@ export interface BrollClip {
 }
 
 export interface RescueMedia {
+  /** Complete MP4 with mixed audio and burned-in captions, composed locally. */
+  videoUrl?: string;
   provenance?: { mode?: string; modelInference?: boolean; [key: string]: unknown };
   /**
    * Narration audio URL. If absent, the UI falls back to the browser's
@@ -130,7 +135,15 @@ export interface RescueMedia {
   broll: BrollClip[];
 }
 
-export interface GameplayLoop {
+interface LibraryCredit {
+  title?: string;
+  creator?: string;
+  source?: string;
+  license?: string;
+  licenseUrl?: string;
+}
+
+export interface GameplayLoop extends LibraryCredit {
   id: string;
   type: string;
   /** 0–1 */
@@ -139,7 +152,7 @@ export interface GameplayLoop {
   url?: string;
 }
 
-export interface MusicBed {
+export interface MusicBed extends LibraryCredit {
   id: string;
   tempo: number;
   energy: number;

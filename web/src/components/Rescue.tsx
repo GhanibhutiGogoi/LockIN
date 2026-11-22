@@ -172,6 +172,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   const [term, setTerm] = useState<string | null>(null);
   const [awaitingPlay, setAwaitingPlay] = useState(false);
   const narration = useRef<Narration | null>(null);
+  const video = useRef<HTMLVideoElement>(null);
   const termTimer = useRef<number | null>(null);
 
   // start narration once; quiz phase keeps the visuals but stops the clock
@@ -183,7 +184,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
       localOnly: deck.sourceType === 'screen',
       onBlocked: () => { if (!cancelled) { setAwaitingPlay(true); playbackBlocked(); } },
       onPlaying: () => { if (!cancelled) { setAwaitingPlay(false); playbackStarted(); } },
-    });
+    }, video.current ?? undefined);
     narration.current = n;
     let raf = 0;
     const loopFn = () => {
@@ -240,6 +241,9 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
 
   return (
     <div className="absolute inset-0" data-recap-playing={!quiz || undefined}>
+      {pack.media.videoUrl ? (
+        <video ref={video} src={pack.media.videoUrl} playsInline muted={muted} className="h-full w-full object-contain" aria-label="Gameplay recap" />
+      ) : <>
       {/* top: the slide, slowly pushing in */}
       <div className={`absolute inset-x-0 top-0 overflow-hidden bg-[#111] ${hasBackground ? 'h-[55%]' : 'h-full'}`}>
         <div
@@ -290,6 +294,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
         </div>
       )}
 
+      </>}
       <Header progress={quiz ? 1 : progress} />
 
       {!quiz && awaitingPlay && <div className="absolute inset-0 z-10 grid place-items-center bg-black/75 px-6 pb-20">
