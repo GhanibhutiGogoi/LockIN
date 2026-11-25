@@ -73,30 +73,36 @@ export function DeskScreen() {
             <span className="home-line" aria-hidden><span className="home-in">In</span></span>
           </h1>
           <div className="max-w-[38ch] lg:col-span-4">
-            <p className="text-[clamp(22px,1.9vw,30px)] font-semibold leading-[1.25]">Your slides. Space to focus.</p>
-            <p className="mt-4 text-[17px] leading-relaxed text-graphite">Open your lecture slides, pick up where you left off, and keep a record of each study session.</p>
-            <button type="button" className="btn btn-primary btn-lg mt-7" onClick={pick} disabled={!!busy || !ready} aria-describedby="upload-help">
-              <Icon name="upload" size={20} /> {ready ? 'Open your slides' : 'Opening your library…'}
-            </button>
-            <p id="upload-help" className="mt-3 text-[15px] text-graphite">{powerPoint ? 'PDF or PowerPoint' : 'PDF'} · up to 50 MB. Drop a file anywhere.</p>
-            <p className="mt-2 text-[15px] text-graphite">PDFs are saved in this browser. {powerPoint ? 'PowerPoint files are sent to the slide service for conversion.' : 'In PowerPoint, use Export → PDF first.'}</p>
-            {error && <p role="alert" className="mt-5 text-[16px] text-lapse">{error}</p>}
-            {warning && <p role="status" className="mt-5 text-[15px] text-graphite">{warning}</p>}
-            <p className="mt-5 text-[15px] text-graphite">
-              {registry.canRecap() ? 'AI recaps are enabled. You can request one during study.' : 'AI recaps are not connected yet. Slide study works without them.'}
-              {registry.config.attention.mode === 'off' && ' Gaze tracking is unavailable; no attention score will be estimated.'}
-            </p>
-            <form className="mt-7 grid gap-2 border-t border-rule pt-5" onSubmit={(e) => {
+            <p className="text-[clamp(22px,1.9vw,30px)] font-semibold leading-[1.25]">Your screen. Space to focus.</p>
+            <p className="mt-4 text-[17px] leading-relaxed text-graphite">Study in WPS, your browser, or another app. Share your screen to connect what you’re reading with your study goal.</p>
+            <form className="mt-7 grid gap-3" onSubmit={(e) => {
               e.preventDefault();
               void shareStudyScreen(false, goal);
             }}>
               <label htmlFor="screen-goal" className="text-[15px] font-semibold">What are you studying? <span className="font-normal text-graphite">(optional)</span></label>
               <input id="screen-goal" type="text" maxLength={300} value={goal} onChange={(e) => setGoal(e.target.value)}
-                className="rounded-lg border border-rule bg-sheet px-3 py-2 text-[15px]" placeholder="e.g. Review reinforcement learning"
+                className="rounded-lg border border-rule bg-sheet px-4 py-3 text-[16px]" placeholder="e.g. Review reinforcement learning"
                 aria-describedby="screen-goal-help" />
-              <p id="screen-goal-help" className="text-[13px] text-graphite">Share your entire calibrated display to study across apps. Add a goal to detect unrelated content. Connect narration in Settings for video reminders.</p>
-              <button type="submit" className="btn btn-quiet mt-1 justify-self-start" disabled={!!busy || !ready}>Share your screen</button>
+              <p id="screen-goal-help" className="text-[13px] text-graphite">A goal helps LockIn notice when a page is unrelated to your study.</p>
+              <button type="submit" className="btn btn-primary btn-lg mt-2 justify-self-start" disabled={!!busy || !ready} aria-describedby="screen-share-help">
+                <Icon name="external" size={20} /> Share your screen
+              </button>
+              <p id="screen-share-help" className="text-[14px] leading-relaxed text-graphite">Choose your entire display. Calibrate once in fullscreen, then resize LockIn and switch between apps on that display.</p>
             </form>
+            <p className="mt-3 text-[14px] text-graphite">
+              {registry.canRecap() ? 'Video reminders are connected.' : 'For video reminders, connect narration in Settings.'}
+              {registry.config.attention.mode === 'off' && ' Gaze tracking is unavailable; no attention score will be estimated.'}
+            </p>
+            <div className="mt-7 border-t border-rule pt-5">
+              <button type="button" className="btn btn-quiet" onClick={pick} disabled={!!busy || !ready} aria-describedby="upload-limit upload-help">
+                <Icon name="upload" size={18} /> {ready ? 'Open your slides' : 'Opening your library…'}
+              </button>
+              <p id="upload-limit" className="mt-3 text-[14px] leading-relaxed text-graphite">For reading slides inside LockIn only. This mode doesn’t read pages in WPS or other apps.</p>
+              <p id="upload-help" className="mt-2 text-[13px] text-graphite">{powerPoint ? 'PDF or PowerPoint' : 'PDF'} · up to 50 MB. Drop a file anywhere.</p>
+              <p className="mt-2 text-[13px] text-graphite">PDFs stay in this browser. {powerPoint ? 'PowerPoint files are sent for conversion.' : 'For PowerPoint, export to PDF first.'}</p>
+            </div>
+            {error && <p role="alert" className="mt-5 text-[16px] text-lapse">{error}</p>}
+            {warning && <p role="status" className="mt-5 text-[15px] text-graphite">{warning}</p>}
             {DEMO_MODE && <button type="button" className="btn btn-quiet mt-4" onClick={async () => {
               const { DEMO_DECK } = await import('../lib/demoDeck');
               actions.addDeck(DEMO_DECK); study(DEMO_DECK);
