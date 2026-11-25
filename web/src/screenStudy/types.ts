@@ -22,7 +22,8 @@ export interface ScreenScene {
   classificationStartedAt?: number;
   text?: string;
   studyText?: string;
-  classification?: { reason?: string; rawDecision?: string | null; evidence?: { id: number; text: string }[] };
+  classification?: { reason?: string; rawDecision?: string | null; evidence?: { id: number; text: string }[];
+    contentFilter?: { method: string; excludedBlocks: number; headerBottomRatio?: number } };
   blocks?: TextBlock[];
   slideIndex?: number;
   message?: string;

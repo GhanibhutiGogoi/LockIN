@@ -53,13 +53,15 @@ export class ScreenProcessor {
     try {
       const response = await fetch('/v1/web-screen/activity', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ goal: this.timeline.goal, text: scene.text }), signal,
+        body: JSON.stringify({ goal: this.timeline.goal, text: scene.text,
+          ...(scene.blocks ? { blocks: scene.blocks, image: { width: scene.width, height: scene.height } } : {}) }), signal,
       });
       const result = response.ok ? await response.json() : {};
       signal.throwIfAborted();
       scene.label = ['related', 'off-topic', 'uncertain'].includes(result.label) ? result.label : 'unavailable';
       scene.studyText = typeof result.studyText === 'string' ? result.studyText : undefined;
-      scene.classification = { reason: result.reason, rawDecision: result.rawDecision, evidence: result.evidence };
+      scene.classification = { reason: result.reason, rawDecision: result.rawDecision, evidence: result.evidence,
+        contentFilter: result.contentFilter };
     } catch (error) {
       scene.label = 'unavailable';
       scene.message = error instanceof Error ? error.message : 'Screen classification failed.';

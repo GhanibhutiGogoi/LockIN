@@ -41,7 +41,7 @@ it('prioritizes the current page and continues OCR while an older classification
 it('retains delayed results on their scene, preserves OCR boxes and classifies against the goal', async () => {
   const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/status') ? { status: 'ready' }
     : url.endsWith('/text') ? { lines: ['Data mining'], blocks: [{ text: 'Data mining', confidence: .9, polygon: [[0, 0], [100, 0], [100, 50], [0, 50]] }], image: { width: 100, height: 50 } }
-    : { label: 'related' })));
+    : { label: 'related', contentFilter: { method: 'ocr-layout', excludedBlocks: 0 } })));
   vi.stubGlobal('fetch', fetcher);
   const timeline = new ScreenTimeline(1000, 'Data mining');
   const first = timeline.observe(1000, true, 100, 50, 'monitor');
@@ -51,7 +51,9 @@ it('retains delayed results on their scene, preserves OCR boxes and classifies a
   await processor.finish();
   expect(first).toMatchObject({ timestamp: 1000, status: 'ready', label: 'related', blocks: [{ text: 'Data mining' }] });
   expect(timeline.current?.status).toBe('pending');
-  expect(JSON.parse(fetcher.mock.calls[2][1]!.body as string)).toEqual({ goal: 'Data mining', text: 'Data mining' });
+  expect(JSON.parse(fetcher.mock.calls[2][1]!.body as string)).toEqual({ goal: 'Data mining', text: 'Data mining',
+    blocks: first.blocks, image: { width: 100, height: 50 } });
+  expect(first.classification?.contentFilter).toEqual({ method: 'ocr-layout', excludedBlocks: 0 });
 });
 
 it('bounds pending screenshots and explicitly marks superseded scenes', async () => {

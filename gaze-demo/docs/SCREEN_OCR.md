@@ -101,6 +101,24 @@ count, dimensions, duration, and errors, but not OCR text. Missing context is no
 logged as a default focused sample. Webcam diagnostics remain available separately.
 Recovery diagnostics also include the failure stage and worker restart count.
 
+### Excluding inactive tabs from relevance
+
+Screen activity requests include OCR boxes and decoded-image dimensions. The
+classifier detects header rows from UI controls (WPS menus, address bars, or
+close-tab/new-tab controls) in the upper quarter of the image, and removes text
+above that boundary before classification and recap context selection. Topic
+words and lesson filenames never define that boundary. Without a detected
+toolbar, a fullscreen document's heading remains eligible even near the top.
+Text-only OCR clients retain the legacy text filtering path.
+
+The classification prompt requires a relationship between the document body
+and the specific study goal; general academic information is not automatically
+related. Both related and off-topic decisions must cite supplied text blocks.
+Session scenes record `classification.contentFilter` with the filtering method,
+number of excluded boxes, and normalized header boundary. This is a layout
+heuristic: unrecognized or unusually positioned application controls may still
+need additional rules. It does not change classification queues or recap timing.
+
 ## Automated checks
 
 With the backend running, from the repository root:
