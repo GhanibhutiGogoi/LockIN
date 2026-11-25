@@ -59,7 +59,7 @@ it('uploads a real file object, studies, saves an honest report and restores the
   await settle(() => useApp.getState().libraryReady);
   expect(host.textContent).not.toContain('Try the sample deck');
   expect(host.textContent).not.toContain('Example report');
-  expect(host.textContent).toContain('AI recaps are not connected');
+  expect(host.textContent).toContain('For video reminders, connect narration in Settings.');
 
   const input = host.querySelector<HTMLInputElement>('input[type=file]')!;
   const file = new NodeFile(['%PDF-fixture for UI orchestration'], 'My real lecture.pdf', { type: 'application/pdf' });
