@@ -53,3 +53,75 @@ The API implements `GET /readyz` and `POST /narration`. A narration request acce
 3. Use **Settings → View saved videos** to replay a recap, see its disk use, or delete it after a session. Each published recap has an MP4 and metadata beneath `media/data/recaps/` (relative to `LOCKIN_DATA_DIR` if configured). Deleting a recap removes that directory. Shared source clips and music are reusable across decks.
 
 A connection check uses no model tokens. If the voice check succeeds but the first recap cannot write a script, check the selected CLI login or API configuration. [Starter library sources and size limits](MEDIA_LIBRARY.md)
+
+## Script latency experiment (2026-11-25)
+
+The `codex/faster-video-generation` branch is based on PR #8's conflict-resolution
+commit `8e6a7f0`. The actual writer was verified by running the existing CLI path:
+`gpt-6.2-sol`, OpenAI provider, low reasoning. The default is now explicitly pinned
+instead of inheriting a future CLI default. `LOCKIN_LLM_MODEL` still overrides it.
+
+The first optimization keeps the MP4 playback flow. It reduces the narration word
+budget from 3.0 to 2.3 words per target second (adjusted by pacing), asks for concise
+summary/quiz feedback, and lets the existing compositor select assets locally.
+It no longer sends the asset catalog to the model by default. Set
+`LOCKIN_LLM_SELECT_ASSETS=true` to restore model-directed asset selection.
+
+Validated scripts are cached locally for one hour, up to 128 entries, in
+`media/data/cache/script-*.json`. Keys cover the full request, model/provider,
+reasoning configuration, prompt version and credentials; raw source text and
+credentials are not stored in cache filenames or timing logs. Cache files contain
+the generated educational text. Concurrent identical requests share a generation.
+Failures are not cached. Set `LOCKIN_LLM_CACHE_SECONDS=0` to disable reuse or delete
+these cache files while the studio is stopped. Changing content or generation
+settings invalidates reuse. Media caching continues independently as before.
+
+Run a repeatable synthetic-text benchmark from `media/`:
+
+```powershell
+.venv/Scripts/python.exe -X utf8 scripts/benchmark-scripts.py --runs 3 --output ../.runtime/windows/script-optimized.json
+```
+
+This performs three uncached real generations and a separate generation/cache-hit
+pair. It uses temporary storage, does not require the narration server, and does
+not send personal screen content. `--model` compares another available Codex model.
+
+Measured on this workstation (small sample, not a latency guarantee):
+
+| Configuration | Script latency |
+| --- | --- |
+| Original prompt, actual CLI default gpt-6.2-sol (one run) | 24.353 s |
+| Shorter prompt, same model (three uncached API-handler runs) | 20.631 / 20.059 / 20.012 s |
+| Same request, cached | 0.064 s |
+| Shorter prompt, gpt-6-luna (one direct writer run) | 18.236 s |
+
+The three-run median is 20.059 s, approximately 18% below the single current
+baseline. The historical 123 s script latency was from a different run and should
+not be used to attribute a six-fold gain to this change. The lighter model's small
+single-run advantage was insufficient to change the default. Sample outputs kept
+the 1.5 IQR fences and the distinction between potential outliers and errors.
+Full uncached video readiness within 27 seconds has NOT yet been demonstrated.
+The local narration endpoint on port 18114 refused connections during this test.
+
+### Stage timings
+
+Restart the studio after updating. Each `/scripts` and `/media` request writes one
+JSON line to `media/data/timings.jsonl` (or the configured `LOCKIN_DATA_DIR`). Each
+record has a UTC timestamp, request ID, HTTP status, total milliseconds, stages,
+actual writer model when reported, and cache-hit metadata. It contains no prompts,
+credentials, source text or generated speech text. Timings also appear in server
+logs and `Server-Timing` / `X-Request-ID` response headers. Browser integration logs
+show the headers and playback-start delay (including media loading).
+
+Stages include `script_queue`, `llm`, `script_total`, `media_queue`,
+`narration_request`, `voice_probe`, `captions`, `ffmpeg_encode`, `video_probe`, and
+`composition`. Totals contain their sub-stages; do not add them all together.
+Network/service wait is included in `narration_request`.
+
+Update and restart the remote narration service too to obtain `remote_queue`,
+`remote_tts`, `remote_pace`, `remote_audio_probe`, `remote_alignment` and
+`remote_audio_encode`. Old narration servers remain compatible but supply only
+the overall narration-request duration. Remote services log their own request
+records and return `timings_ms` with the audio. Cache hits naturally omit stages
+that did not execute. Keep window-focus/autoplay waiting separate from generation
+latency when assessing the 30-second intervention target.

@@ -1,6 +1,7 @@
 """Write a recap from one slide using credentials on the workstation."""
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,14 +13,23 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .schemas import Variant
+from .timing import annotate, timed
 
 
 class Writer(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LOCKIN_LLM_", env_file=".env", extra="ignore")
     provider: Literal["codex", "claude", "api"] = "codex"
     model: str = ""
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] = "low"
+    select_assets: bool = False
+    cache_seconds: int = Field(default=3600, ge=0, le=86400)
     base_url: str = ""
     api_key: SecretStr = SecretStr("")
+
+    @property
+    def effective_model(self):
+        # Pin the verified default instead of silently changing with CLI updates.
+        return self.model or ("gpt-6.2-sol" if self.provider == "codex" else "")
 
     def check(self):
         if self.provider == "api":
@@ -65,12 +75,16 @@ class Draft(BaseModel):
     music_id: str | None = None
 
 
+@timed("script_total")
 def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
     writer.check()
+    annotate(
+        writer_provider=writer.provider, configured_model=writer.effective_model or "CLI default"
+    )
     v = req.variant
     prompt = (
         f"Write a {v.target_seconds}-second spoken study recap in English. Aim for "
-        f"{round(v.target_seconds * 3.0 * v.pacing)} words across hook and script. "
+        f"{round(v.target_seconds * 2.3 * v.pacing)} words across hook and script. "
         f"Use {v.humour_style} humor and {v.slang_level} slang where appropriate. "
         "Hook with a concrete surprise. Explain the mechanism in short sentences and end on a "
         "funny callback. Preserve numbers, qualifications and facts. Use only the supplied slide. "
@@ -79,11 +93,15 @@ def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
         "items, each containing question, options, answer_index (zero-based), if_right, if_wrong). "
         "All values except quiz, options and answer_index are strings. No markup or stage cues."
     )
-    prompt += (
-        " Choose a gameplay_id and music_id from these local assets to suit the pacing and "
-        f"tone. Prefer gameplay category {v.gameplay_type} when available. Keep asset IDs and "
-        "titles out of the narration. Available IDs and tags: " + json.dumps(catalog)
-    )
+    if writer.select_assets:
+        prompt += (
+            " Choose a gameplay_id and music_id from these local assets to suit the pacing and "
+            f"tone. Prefer gameplay category {v.gameplay_type} when available. Keep asset IDs and "
+            "titles out of the narration. Available IDs and tags: " + json.dumps(catalog)
+        )
+    else:
+        prompt += " Omit gameplay_id and music_id; assets are selected locally."
+    prompt += " Keep plain_summary to one sentence and quiz feedback to one short sentence each."
     if req.depth == 2:
         prompt += " Explain this again with simpler wording and a fresh example."
     source = req.slide.model_dump_json()
@@ -91,7 +109,7 @@ def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
         headers = {}
         if key := writer.api_key.get_secret_value():
             headers["Authorization"] = f"Bearer {key}"
-        response = httpx.post(
+        response = timed("llm")(httpx.post)(
             writer.base_url.rstrip("/") + "/chat/completions",
             headers=headers,
             timeout=150,
@@ -105,6 +123,7 @@ def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
             },
         )
         response.raise_for_status()
+        annotate(actual_model=response.json().get("model", writer.model))
         raw = response.json()["choices"][0]["message"]["content"]
     else:
         with tempfile.TemporaryDirectory() as scratch:
@@ -128,7 +147,7 @@ def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
                     "-c",
                     'web_search="disabled"',
                     "-c",
-                    'model_reasoning_effort="low"',
+                    f'model_reasoning_effort="{writer.reasoning_effort}"',
                     "-o",
                     "result.txt",
                 ]
@@ -144,11 +163,11 @@ def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
                     "--disable-slash-commands",
                     "--no-session-persistence",
                 ]
-            if writer.model:
-                command += ["--model", writer.model]
+            if writer.effective_model:
+                command += ["--model", writer.effective_model]
             if writer.provider == "codex":
                 command += ["-"]
-            result = subprocess.run(
+            result = timed("llm")(subprocess.run)(
                 command,
                 input=prompt + "\nSlide JSON:\n" + source,
                 cwd=scratch,
@@ -158,6 +177,13 @@ def write_script(writer: Writer, req: ScriptRequest, catalog: dict):
                 check=True,
                 timeout=180,
             )
+            for label, field in (
+                ("model", "actual_model"),
+                ("reasoning effort", "reasoning_effort"),
+            ):
+                match = re.search(r"^" + label + r":\s*(.+)$", getattr(result, "stderr", ""), re.M)
+                if match:
+                    annotate(**{field: match.group(1).strip()})
             raw = (
                 (Path(scratch) / "result.txt").read_text(encoding="utf-8")
                 if writer.provider == "codex"

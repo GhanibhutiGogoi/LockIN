@@ -18,9 +18,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .compose_recap import check_ffmpeg, compose
 from .schemas import Caption, MediaRequest, Script
-from .script_writer import Question, ScriptRequest, Writer, write_script
+from .script_cache import cached_script
+from .script_writer import Question, ScriptRequest, Writer
 from .settings import Settings
 from .storage import Store, digest, write_json
+from .timing import annotate, install_timing, remote_durations, stage, timed
 
 
 class VoiceConnection(BaseModel):
@@ -48,6 +50,7 @@ class RenderRequest(MediaRequest, VoiceConnection):
 
 
 class Recording(BaseModel):
+    timings_ms: dict[str, float] = Field(default_factory=dict)
     audio_base64: str = Field(min_length=1, max_length=8_000_000)
     captions: list[Caption] = Field(min_length=1, max_length=240)
 
@@ -80,11 +83,13 @@ def create_app():
     root = store.root / "recaps"
     root.mkdir(exist_ok=True)
     app = FastAPI(title="LockIN local studio")
+    install_timing(app, store.root / "timings.jsonl")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_methods=["GET", "HEAD", "POST", "DELETE"],
         allow_headers=["Content-Type", "Range"],
+        expose_headers=["Server-Timing", "X-Request-ID"],
     )
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]", "testserver"]
@@ -120,6 +125,7 @@ def create_app():
                 raise ValueError("Use the base address of the LockIN narration API")
             return {
                 "writer": writer.provider,
+                "configured_model": writer.effective_model or "CLI default",
                 "gameplay": len(store.starter("gameplay")),
                 "music": len(store.starter("music")),
             }
@@ -137,7 +143,7 @@ def create_app():
                 kind: {item["id"]: [item["title"], *item["tags"]] for item in store.starter(kind)}
                 for kind in ("gameplay", "music")
             }
-            return write_script(writer, req, catalog)
+            return cached_script(store, writer, req, catalog)
         except (
             ValueError,
             KeyError,
@@ -156,12 +162,16 @@ def create_app():
         key = digest(req.model_dump(mode="json"))
         dest = root / key
         try:
-            with FileLock(store.root / "locks" / f"recap-{key}.lock", timeout=300):
+            lock = FileLock(store.root / "locks" / f"recap-{key}.lock", timeout=300)
+            with stage("media_queue"):
+                lock.acquire()
+            try:
+                annotate(cache_hit=dest.exists())
                 if not dest.exists():
                     with tempfile.TemporaryDirectory(dir=store.root / "tmp") as temp:
                         work = Path(temp)
                         take = Recording.model_validate(
-                            read_voice(
+                            timed("narration_request")(read_voice)(
                                 req,
                                 "narration",
                                 {
@@ -171,12 +181,13 @@ def create_app():
                                 },
                             )
                         )
+                        remote_durations(take.timings_ms)
                         if [c.word for c in take.captions] != req.spoken_text.split():
                             raise ValueError("The voice API returned captions for different text")
                         (work / "voice.mp3").write_bytes(
                             base64.b64decode(take.audio_base64, validate=True)
                         )
-                        info = compose(
+                        info = timed("composition")(compose)(
                             store, work, req, [c.model_dump() for c in take.captions], key
                         )
                         info.update(
@@ -189,8 +200,10 @@ def create_app():
                         (work / "voice.mp3").unlink()
                         (work / "captions.ass").unlink()
                         work.rename(dest)
-                info = json.loads((dest / "metadata.json").read_text())
+                info = json.loads((dest / "metadata.json").read_text(encoding="utf-8"))
                 return {**info, "broll": [], "provenance": {"mode": "real"}}
+            finally:
+                lock.release()
         except (Timeout, httpx.HTTPError) as e:
             raise HTTPException(
                 503, "Narration unavailable or busy. Check the audio API and retry."
@@ -216,7 +229,7 @@ def create_app():
         items = []
         for path in root.glob("*/metadata.json"):
             try:
-                item = json.loads(path.read_text())
+                item = json.loads(path.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 continue
             items.append(

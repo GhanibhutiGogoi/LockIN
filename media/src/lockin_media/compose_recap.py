@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .audio import duration
 from .storage import Store
+from .timing import timed
 
 HEADER = Path(__file__).with_name("caption-style.ass").read_text()
 
@@ -85,7 +86,7 @@ def write_captions(path, captions, speed, target):
 
 def compose(store: Store, work: Path, request, captions, key):
     voice = work / "voice.mp3"
-    natural = duration(voice)
+    natural = timed("voice_probe")(duration)(voice)
     target = request.variant.target_seconds
     speed = max(0.85, min(1.35, natural / (target - 0.25)))
     speech_end = natural / speed
@@ -107,7 +108,7 @@ def compose(store: Store, work: Path, request, captions, key):
     start = rng.uniform(0, max(0, game["duration_sec"] - seconds))
     music_start = rng.uniform(0, max(0, track["duration_sec"] - seconds))
     subtitle = work / "captions.ass"
-    write_captions(subtitle, captions, speed, speech_end)
+    timed("captions")(write_captions)(subtitle, captions, speed, speech_end)
     if seconds - speech_end >= 2:
         question = (
             request.script.quiz[0].question
@@ -137,7 +138,7 @@ def compose(store: Store, work: Path, request, captions, key):
         "[v][m]amix=inputs=2:normalize=0,alimiter=limit=0.9:latency=1[a]"
     )
     video = work / "video.mp4"
-    subprocess.run(
+    timed("ffmpeg_encode")(subprocess.run)(
         [
             "ffmpeg",
             "-nostdin",
@@ -198,7 +199,7 @@ def compose(store: Store, work: Path, request, captions, key):
         cap["start"] /= speed
         cap["end"] /= speed
     return {
-        "duration_sec": duration(video),
+        "duration_sec": timed("video_probe")(duration)(video),
         "captions": captions,
         "gameplay": game["title"],
         "music": track["title"],

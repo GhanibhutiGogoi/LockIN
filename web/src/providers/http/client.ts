@@ -1,3 +1,4 @@
+import { devlog } from '../../lib/devlog';
 import { camelize, snakify } from '../../contracts/validate';
 
 export class ServiceError extends Error {
@@ -38,6 +39,12 @@ export async function call<T>(
       if (init.signal?.aborted) throw new DOMException('The request was cancelled.', 'AbortError');
       const reason = (err as Error).name === 'AbortError' ? 'timed out' : 'could not be reached (is it running, and does it allow CORS from this page?)';
       throw new ServiceError(`${url} ${reason}`);
+    }
+    if (path === '/scripts' || path === '/media') {
+      const timing = res.headers.get('Server-Timing');
+      if (timing) devlog.push({ team: path === '/scripts' ? 'content' : 'media',
+        level: res.ok ? 'ok' : 'error', label: `${path} server timings`,
+        detail: { requestId: res.headers.get('X-Request-ID'), timing } });
     }
     if (!res.ok) {
       let detail = '';

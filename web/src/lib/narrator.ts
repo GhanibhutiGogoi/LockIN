@@ -1,3 +1,4 @@
+import { devlog } from './devlog';
 /**
  * Plays narration and reports the current time on the caption clock.
  * Uses model audio when provided. Demo speech is separate; real audio errors
@@ -74,11 +75,15 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
   const play = () => {
     if (stopped || fallback || starting) return;
     starting = true;
+    const requestedAt = performance.now();
     try {
       // Deliberately synchronous: preserves the browser's user activation.
       audio.play().then(() => {
         starting = false;
-        if (!stopped && !fallback) events.onPlaying?.();
+        if (!stopped && !fallback) {
+          devlog.push({ team: 'media', level: 'ok', label: 'Playback started', ms: Math.round(performance.now() - requestedAt) });
+          events.onPlaying?.();
+        }
       }, rejected);
     } catch (err) { rejected(err); }
   };
