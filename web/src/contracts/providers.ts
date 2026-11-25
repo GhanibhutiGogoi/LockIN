@@ -121,7 +121,9 @@ export interface ContentProvider {
 // ───────────────────────── Media generation ─────────────────────────
 
 export interface MediaProvider {
-  /** True when the returned MP4 already includes the selected gameplay. */
+  /** Warm local background assets while the script is being written. */
+  preload?(variant: Variant, options?: RequestOptions): Promise<void>;
+  /** True when studio rendering or live layers depend on gameplay and pacing. */
   readonly compiled?: boolean;
   readonly name: string;
   /** TTS + forced-aligned captions + key-term b-roll for a script. */

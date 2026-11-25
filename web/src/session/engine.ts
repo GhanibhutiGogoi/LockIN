@@ -845,6 +845,7 @@ export function playbackBlocked() {
 }
 
 export function playbackStarted() {
+  getScreenTimeline()?.event('playback-confirmed');
   const rescue = useApp.getState().rescue;
   if (rescue?.phase === 'playing' && rescue.awaitingPlayback) {
     useApp.setState({ rescue: { ...rescue, awaitingPlayback: false, startedAt: Date.now() } });

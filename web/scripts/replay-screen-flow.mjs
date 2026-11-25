@@ -51,7 +51,7 @@ try {
   const requests = new Map();
   const serviceTimings = [];
   page.on('request', request => {
-    if (request.method() === 'POST' && /:8013\/(scripts|media)$/.test(request.url())) requests.set(request, Date.now());
+    if (request.method() === 'POST' && /:8013\/(scripts|media(?:\/live)?)$/.test(request.url())) requests.set(request, Date.now());
   });
   page.on('response', response => {
     const started = requests.get(response.request());
@@ -65,7 +65,7 @@ try {
   page.on('console', message => { if (message.type() === 'error') console.log('BROWSER ERROR', message.text()); });
   if (!realMedia) {
     await page.route('http://127.0.0.1:8013/scripts', route => route.fulfill({ json: verified.script.result }));
-    await page.route('http://127.0.0.1:8013/media', route => route.fulfill({ json: verified.media.result }));
+    await page.route('http://127.0.0.1:8013/media/live', route => route.fulfill({ json: verified.media.result }));
   }
   await page.goto(url);
   await page.evaluate(async voiceUrl => {
@@ -122,12 +122,12 @@ try {
     }
     assert.equal(phase, 'loading');
     await page.evaluate(() => window.flow.focus(true));
-    const video = page.getByLabel('Gameplay recap');
+    const video = page.getByLabel(/^(Live gameplay recap|Gameplay recap)$/);
     await video.waitFor({ timeout: 10_000 });
-    await page.waitForFunction(() => document.querySelector('video[aria-label="Gameplay recap"]')?.currentTime > 0, { timeout: 15_000 });
-    await video.evaluate(element => { element.playbackRate = 16; });
+    await page.waitForFunction(() => document.querySelector('video[aria-label="Gameplay recap"], video[aria-label="Live gameplay recap"]')?.currentTime > 0, { timeout: 15_000 });
+    if (!realMedia) await video.evaluate(element => { element.playbackRate = 16; });
     const answers = page.getByRole('group', { name: /Answers/ });
-    await answers.waitFor({ timeout: 15_000 });
+    await answers.waitFor({ timeout: realMedia ? 120_000 : 15_000 });
     await answers.getByRole('button').first().click();
     await page.getByRole('button', { name: /Back to/ }).click();
     await page.evaluate(() => { window.flow.look('screen'); window.flow.content('study'); window.flow.focus(false); });

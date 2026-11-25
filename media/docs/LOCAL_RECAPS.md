@@ -125,3 +125,65 @@ the overall narration-request duration. Remote services log their own request
 records and return `timings_ms` with the audio. Cache hits naturally omit stages
 that did not execute. Keep window-focus/autoplay waiting separate from generation
 latency when assessing the 30-second intervention target.
+
+## Browser-composed playback (2026-11-25)
+
+The connected Studio provider now calls `POST /media/live`. This returns the real
+narration MP3, its word timings and installed gameplay/music URLs. It never calls
+video encoding, subtitle burning, audio remixing or a second narration-speed pass.
+The browser displays a portrait gameplay video and HTML word highlights, with the
+narration's actual playback time as the clock. Background music uses a quiet fixed
+volume (12%); it does not have the offline renderer's loudness normalization.
+The recap ends when narration ends, then presents the question; it is not padded
+to exactly 30 seconds. The 30-second distraction threshold is unchanged.
+
+Background assets begin preloading in parallel with script generation at the
+existing preparation trigger. Narration preloads once ready. Six warm media
+buffers are retained at most and cleared on provider changes. The selected audio
+buffer is reused by the player. Backgrounds pause on blocked playback or narration
+buffering, follow its time after seeks, respect mute, and stop on exit/quiz.
+Optional background failures do not prevent the narrated explanation from playing.
+Existing window-focus and manual autoplay-retry behavior remains in place.
+
+Narration is cached independently of slide identity and background choice under
+`media/data/live/<hash>/`; it is keyed by actual spoken text, voice, pacing and
+voice-service URL. Raw audio is validated before atomic publication. This cache is
+local and persists until removed; delete its directories while the studio is
+stopped to reclaim storage. Existing saved MP4s and `POST /media` remain supported.
+Live recaps do not automatically appear in the saved-MP4 list and do not perform
+background MP4 export.
+
+Restart the Studio and refresh/restart the web app to use the new endpoint. The
+existing narration API remains compatible: no remote update is required for live
+playback, though its update is still needed for detailed TTS/alignment timings.
+`/library/gameplay`, `/library/music`, installed-asset URLs and `/live/<hash>/voice.mp3`
+serve the actual media with browser range-response support. There is no fallback
+to the slower MP4 endpoint if the Studio has not been updated.
+
+Validation on this workstation:
+
+- A reused ~30-second recording plus the same installed library took **16.978 s**
+  to compose as MP4 versus **0.166 s** to prepare for live playback. This isolates
+  assembly and excludes LLM, TTS, alignment, transfer and browser startup.
+- A headless Chrome smoke run with actual installed gameplay/music and explicitly
+  synthetic six-second narration verified captions, mute, completion, quiz and
+  stopped background layers. Audio startup was **814 ms** in that run; this is
+  not end-to-end generation latency.
+- The narration service at `127.0.0.1:18114` still refused connections, so a fresh
+  full LLM → remote TTS → live playback timing could not be measured.
+
+Reproduce the assembly comparison from `media/` with FFmpeg on PATH and a prior
+`verify_flow.py` output whose saved MP4 still exists:
+
+```powershell
+.venv/Scripts/python.exe -X utf8 scripts/benchmark-composition.py --fixture ../.runtime/windows/full-flow.json --output ../.runtime/windows/composition-comparison.json
+```
+
+Starting preparation after three seconds leaves 27 seconds before the target.
+At the measured ~20-second script latency, roughly seven seconds remain for voice,
+alignment, transfer and startup (less with personalization). Removing MP4 encoding
+saves a substantial stage, but does not establish a guaranteed 30-second deadline.
+Use `preparation-started`, `preparation-ready`, `playback-requested` and the new
+`playback-confirmed` timeline event alongside `/media/live` timing records. Unknown
+gaze, genuine recovery, window-focus waiting and browser autoplay restrictions
+remain explicit conditions; a placeholder animation is not counted as a ready recap.

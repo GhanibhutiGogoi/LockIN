@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .compose_recap import check_ffmpeg, compose
+from .live import assets, prepare
 from .schemas import Caption, MediaRequest, Script
 from .script_cache import cached_script
 from .script_writer import Question, ScriptRequest, Writer
@@ -156,6 +157,58 @@ def create_app():
                 502,
                 f"Script failed. Check the local {writer.provider} credentials and retry.",
             ) from e
+
+    @app.get("/library/{kind}")
+    def library(kind: str):
+        if kind not in ("gameplay", "music"):
+            raise HTTPException(404, "Unknown library")
+        return assets(store, kind)
+
+    @app.get("/library/assets/{kind}/{asset_id}")
+    def library_asset(kind: str, asset_id: str):
+        if kind not in ("gameplay", "music"):
+            raise HTTPException(404, "Unknown library")
+        entry = next((e for e in store.starter(kind) if e["id"] == asset_id), None)
+        if not entry:
+            raise HTTPException(404, "Unknown asset")
+        path = (store.root / entry["url"]).resolve()
+        if not path.is_relative_to((store.root / "assets").resolve()) or not path.is_file():
+            raise HTTPException(404, "Unknown asset")
+        return FileResponse(path, headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/media/live")
+    def live_media(req: RenderRequest):
+        try:
+            return prepare(
+                store,
+                req,
+                lambda: Recording.model_validate(
+                    read_voice(
+                        req,
+                        "narration",
+                        {
+                            "text": req.spoken_text,
+                            "voice_id": req.variant.voice_id,
+                            "pacing": req.variant.pacing,
+                        },
+                    )
+                ),
+            )
+        except (Timeout, httpx.HTTPError) as e:
+            raise HTTPException(503, "Narration unavailable or busy") from e
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            raise HTTPException(502, "Live recap preparation failed") from e
+
+    @app.get("/live/{key}/voice.mp3")
+    def live_audio(key: str):
+        if not re.fullmatch(r"[a-f0-9]{64}", key):
+            raise HTTPException(404, "Unknown narration")
+        path = store.root / "live" / key / "voice.mp3"
+        if not path.is_file():
+            raise HTTPException(404, "Unknown narration")
+        return FileResponse(
+            path, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=3600"}
+        )
 
     @app.post("/media")
     def media(req: RenderRequest):

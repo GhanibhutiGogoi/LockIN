@@ -40,7 +40,7 @@ export async function call<T>(
       const reason = (err as Error).name === 'AbortError' ? 'timed out' : 'could not be reached (is it running, and does it allow CORS from this page?)';
       throw new ServiceError(`${url} ${reason}`);
     }
-    if (path === '/scripts' || path === '/media') {
+    if (path === '/scripts' || path === '/media' || path === '/media/live') {
       const timing = res.headers.get('Server-Timing');
       if (timing) devlog.push({ team: path === '/scripts' ? 'content' : 'media',
         level: res.ok ? 'ok' : 'error', label: `${path} server timings`,

@@ -123,6 +123,8 @@ export interface BrollClip {
 }
 
 export interface RescueMedia {
+  /** Browser layers share the narration clock; no MP4 encoding required. */
+  live?: { gameplay: GameplayLoop; music: MusicBed };
   /** Complete MP4 with mixed audio and burned-in captions, composed locally. */
   videoUrl?: string;
   provenance?: { mode?: string; modelInference?: boolean; [key: string]: unknown };

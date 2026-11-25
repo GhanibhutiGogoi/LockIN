@@ -73,6 +73,33 @@ describe('narrator mute', () => {
 });
 
 describe('audio narration', () => {
+  it('pauses live layers when autoplay is blocked and stops them after narration ends', async () => {
+    const master = document.createElement('audio');
+    const game = document.createElement('video');
+    const music = document.createElement('audio');
+    vi.spyOn(master, 'play').mockRejectedValueOnce(new DOMException('Blocked', 'NotAllowedError')).mockResolvedValue();
+    for (const layer of [master, game, music]) vi.spyOn(layer, 'pause').mockImplementation(() => {});
+    vi.spyOn(game, 'play').mockResolvedValue();
+    vi.spyOn(music, 'play').mockResolvedValue();
+    const onBlocked = vi.fn();
+    const n = narrate(media(), text, { voiceId: 'hype', pacing: 1 }, false,
+      { layers: { game, music }, onBlocked }, master);
+    await Promise.resolve();
+    expect(onBlocked).toHaveBeenCalledOnce();
+    expect(game.pause).toHaveBeenCalled();
+    expect(music.pause).toHaveBeenCalled();
+    n.play?.();
+    await Promise.resolve();
+    n.setMuted(true);
+    expect(master.muted).toBe(true);
+    expect(music.muted).toBe(true);
+    master.dispatchEvent(new Event('ended'));
+    await n.done;
+    const calls = vi.mocked(game.play).mock.calls.length;
+    master.dispatchEvent(new Event('playing'));
+    expect(game.play).toHaveBeenCalledTimes(calls);
+  });
+
   it('uses the compiled video clock and stops the supplied player', async () => {
     const player = document.createElement('video');
     const play = vi.spyOn(player, 'play').mockResolvedValue();

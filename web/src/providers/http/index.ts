@@ -1,3 +1,4 @@
+import { preloadMedia } from '../../lib/mediaPreload';
 /**
  * HTTP adapters. Each team runs a service at its own base URL and implements
  * the endpoints listed in docs/INTEGRATION.md. Responses are validated against
@@ -75,23 +76,32 @@ export class HttpMediaProvider implements MediaProvider {
   constructor(private base: string, private voiceUrl?: string) {
     this.name = `HTTP · ${base}`;
   }
+  async preload(variant: Variant, options?: RequestOptions): Promise<void> {
+    if (!this.voiceUrl) return;
+    const [games, music] = await Promise.all([this.listGameplayLoops(), this.listMusicBeds()]);
+    if (options?.signal?.aborted) return;
+    const game = games.find(g => g.type === variant.gameplayType) ?? games[0];
+    preloadMedia(game?.url, 'video'); preloadMedia(music[0]?.url, 'audio');
+  }
   async renderMedia(args: { deckId: string; slideIndex: number; script: RescueScript; variant: Variant }, options?: RequestOptions): Promise<RescueMedia> {
-    const media = await call<RescueMedia>(this.base, '/media', { body: this.voiceUrl ? { ...args, voiceUrl: this.voiceUrl } : args, timeoutMs: this.voiceUrl ? 400_000 : 60_000, signal: options?.signal });
+    const media = await call<RescueMedia>(this.base, this.voiceUrl ? '/media/live' : '/media', { body: this.voiceUrl ? { ...args, voiceUrl: this.voiceUrl } : args, timeoutMs: this.voiceUrl ? 400_000 : 60_000, signal: options?.signal });
     if (!DEMO_MODE && (!(media.audioUrl || media.videoUrl) || media.provenance?.mode === 'mock' || media.provenance?.modelInference === false)) {
       throw new Error('The narration service is not producing model audio yet. You can keep studying while it is being connected.');
     }
     media.videoUrl = resolveUrl(this.base, media.videoUrl);
     media.audioUrl = resolveUrl(this.base, media.audioUrl);
+    if (media.live) {
+      media.live.gameplay.url = resolveUrl(this.base, media.live.gameplay.url);
+      media.live.music.url = resolveUrl(this.base, media.live.music.url)!;
+    }
     media.broll = (media.broll ?? []).map((b) => ({ ...b, url: resolveUrl(this.base, b.url)! }));
     return assertContract('Video · POST /media', media, (m) => checkMedia(m, `${args.script.hook} ${args.script.script}`));
   }
   async listGameplayLoops(): Promise<GameplayLoop[]> {
-    if (this.voiceUrl) return []; // Compiled into the local MP4.
     const loops = await call<GameplayLoop[]>(this.base, '/library/gameplay');
     return loops.map((l) => ({ ...l, url: resolveUrl(this.base, l.url) }));
   }
   async listMusicBeds(): Promise<MusicBed[]> {
-    if (this.voiceUrl) return [];
     const beds = await call<MusicBed[]>(this.base, '/library/music');
     return beds.map((b) => ({ ...b, url: resolveUrl(this.base, b.url)! }));
   }

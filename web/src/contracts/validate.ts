@@ -93,6 +93,11 @@ export function checkMedia(m: Partial<RescueMedia>, spokenText?: string): Proble
     const want = captionTokens(spokenText).length;
     need(p, m.captions.length === want, `media.captions has ${m.captions.length} entries; hook + " " + script has ${want} whitespace tokens (one caption per token)`);
   }
+  if (m.live) {
+    need(p, isStr(m.audioUrl) && !m.videoUrl, 'live media requires narration audio and no compiled video');
+    need(p, isStr(m.live.gameplay?.url), 'live gameplay requires a URL');
+    need(p, isStr(m.live.music?.url), 'live music requires a URL');
+  }
   if (m.audioUrl !== undefined) need(p, isStr(m.audioUrl), 'media.audioUrl must be a string URL');
   need(p, Array.isArray(m.broll ?? []), 'media.broll must be an array');
   (Array.isArray(m.broll) ? m.broll : []).forEach((b, i) => {

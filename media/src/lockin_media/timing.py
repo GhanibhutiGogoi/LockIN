@@ -59,7 +59,7 @@ def timed(name):
 def install_timing(app, log_path=None):
     @app.middleware("http")
     async def measure(request, call_next):
-        if request.url.path not in ("/scripts", "/media", "/narration"):
+        if request.url.path not in ("/scripts", "/media", "/media/live", "/narration"):
             return await call_next(request)
         trace = {
             "request_id": uuid4().hex,

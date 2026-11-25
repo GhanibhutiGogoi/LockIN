@@ -1,3 +1,4 @@
+import { clearMediaPreloads, preloadMedia } from '../lib/mediaPreload';
 /**
  * Rescue-pack cache. Composes AI-analysis output (script) with video output
  * (media) into a RescuePack only when a recap is triggered. Opening a deck or
@@ -48,6 +49,7 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
   const content = registry.content;
   const mediaProvider = registry.media;
   const { signal } = owner.controller;
+  void mediaProvider.preload?.(variant, { signal }).catch(() => {});
   const assertCurrent = () => {
     if (owner !== cache || signal.aborted) throw new Error('The AI connection changed. Request this recap again.');
   };
@@ -63,11 +65,17 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
   const key = mediaProvider.compiled ? JSON.stringify([audioKey, variant.gameplayType]) : audioKey;
   const media = await cached(owner.medias, key, () => mediaProvider.renderMedia({ deckId: deck.id, slideIndex, script, variant }, { signal }));
   assertCurrent();
+  if (media.live) {
+    preloadMedia(media.audioUrl, 'audio');
+    preloadMedia(media.live.gameplay.url, 'video');
+    preloadMedia(media.live.music.url, 'audio');
+  }
   // every knob that shaped this pack is in its keys, so labelling it with `variant` is accurate
   return { deckId: deck.id, slideIndex, variant, script, media };
 }
 
 export function clearPacks() {
+  clearMediaPreloads();
   const previous = cache;
   cache = newCache();
   previous.controller.abort();

@@ -173,6 +173,8 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   const [awaitingPlay, setAwaitingPlay] = useState(false);
   const narration = useRef<Narration | null>(null);
   const video = useRef<HTMLVideoElement>(null);
+  const liveGame = useRef<HTMLVideoElement>(null);
+  const liveMusic = useRef<HTMLAudioElement>(null);
   const termTimer = useRef<number | null>(null);
 
   // start narration once; quiz phase keeps the visuals but stops the clock
@@ -181,6 +183,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
     let cancelled = false;
     setAwaitingPlay(false);
     const n = narrate(pack.media, text, pack.variant, muted, {
+      layers: liveGame.current && liveMusic.current ? { game: liveGame.current, music: liveMusic.current } : undefined,
       onBlocked: () => { if (!cancelled) { setAwaitingPlay(true); playbackBlocked(); } },
       onPlaying: () => { if (!cancelled) { setAwaitingPlay(false); playbackStarted(); } },
     }, video.current ?? undefined);
@@ -237,12 +240,25 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   const emphasis = timed?.term ?? term;
   const slide = deck.slides[pack.slideIndex];
   const hasBackground = !!loop?.url || DEMO_MODE;
+  const live = pack.media.live;
 
   return (
     <div className="absolute inset-0" data-recap-playing={!quiz || undefined}>
       {pack.media.videoUrl ? (
         <video ref={video} src={pack.media.videoUrl} playsInline muted={muted} className="h-full w-full object-contain" aria-label="Gameplay recap" />
       ) : <>
+      {live && <>
+        <video ref={liveGame} src={live.gameplay.url} preload="auto" muted playsInline loop
+          className="absolute inset-0 h-full w-full object-cover" aria-label="Live gameplay recap" />
+        <audio ref={liveMusic} src={live.music.url} preload="auto" loop />
+        <div className="absolute bottom-24 left-3 right-3 z-10 text-[11px] text-white/80">
+          {[live.gameplay, live.music].map(asset => <div key={asset.id}>
+            <a href={asset.source} target="_blank" rel="noreferrer">{asset.title} · {asset.creator}</a>
+            {' · '}<a href={asset.licenseUrl} target="_blank" rel="noreferrer">{asset.license}</a>
+          </div>)}
+        </div>
+      </>}
+      {!live && <>
       {/* top: the slide, slowly pushing in */}
       <div className={`absolute inset-x-0 top-0 overflow-hidden bg-[#111] ${hasBackground ? 'h-[55%]' : 'h-full'}`}>
         <div
@@ -280,9 +296,10 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
         <Gameplay loop={loop} dim={quiz} />
       </div>}
 
+      </>}
       {/* captions straddle the split */}
       {!quiz && chunk && (
-        <div className={`pointer-events-none absolute inset-x-0 z-10 -translate-y-1/2 px-6 text-center ${hasBackground ? 'top-[55%]' : 'top-[80%]'}`}>
+        <div className={`pointer-events-none absolute inset-x-0 z-10 -translate-y-1/2 px-6 text-center ${live ? 'top-[63%]' : hasBackground ? 'top-[55%]' : 'top-[80%]'}`}>
           <p key={chunkIdx} className="rot-caption rot-pop text-[clamp(28px,6.4vh,52px)]">
             {captions.slice(chunk.from, chunk.to + 1).map((w, i) => (
               <span key={i} className={chunk.from + i === wordIdx ? 'now' : undefined}>

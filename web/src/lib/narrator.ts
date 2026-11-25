@@ -1,3 +1,5 @@
+import { liveLayers } from './liveLayers';
+import { takePreloadedAudio } from './mediaPreload';
 import { devlog } from './devlog';
 /**
  * Plays narration and reports the current time on the caption clock.
@@ -26,6 +28,7 @@ export interface Narration {
 type Voice = Pick<Variant, 'pacing' | 'voiceId'>;
 export interface PlaybackOptions {
   localOnly?: boolean;
+  layers?: { game: HTMLMediaElement; music: HTMLMediaElement };
   onBlocked?(): void;
   onPlaying?(): void;
 }
@@ -36,9 +39,10 @@ export function narrate(media: RescueMedia, text: string, variant: Voice, muted:
 }
 
 function audioNarration(media: RescueMedia, text: string, variant: Voice, muted: boolean, events: PlaybackOptions, player?: HTMLMediaElement): Narration {
-  const audio = player ?? new Audio(media.audioUrl);
+  const audio = player ?? takePreloadedAudio(media.audioUrl) ?? new Audio(media.audioUrl);
   audio.preload = 'auto';
   audio.muted = muted;
+  const layers = events.layers ? liveLayers(audio, events.layers.game, events.layers.music, muted) : undefined;
   let resolve!: () => void;
   const done = new Promise<void>((r) => (resolve = r));
   let isMuted = muted;
@@ -52,6 +56,7 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
     if (stopped || fallback) return;
     audio.onerror = audio.onended = null;
     audio.pause();
+    layers?.stop();
     if (!DEMO_MODE) {
       stopped = true;
       error = 'The narration file could not be played. Check your connection and request the recap again.';
@@ -61,10 +66,11 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
     fallback = speechNarration(media, text, variant, isMuted);
     void fallback.done.then(resolve);
   };
-  audio.onended = () => { stopped = true; resolve(); };
+  audio.onended = () => { stopped = true; layers?.stop(); resolve(); };
   audio.onerror = toSpeech;
   const rejected = (err: unknown) => {
     starting = false;
+    layers?.pause();
     if (stopped || fallback) return;
     if ((err as DOMException)?.name === 'NotAllowedError') {
       // Keep the pack, Audio element and completion promise alive. Only the
@@ -78,8 +84,10 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
     const requestedAt = performance.now();
     try {
       // Deliberately synchronous: preserves the browser's user activation.
+      layers?.start();
       audio.play().then(() => {
         starting = false;
+        if (stopped) { audio.pause(); return; }
         if (!stopped && !fallback) {
           devlog.push({ team: 'media', level: 'ok', label: 'Playback started', ms: Math.round(performance.now() - requestedAt) });
           events.onPlaying?.();
@@ -96,6 +104,7 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
     boundaryWord: () => (fallback ? fallback.boundaryWord() : -1),
     stop: () => {
       stopped = true;
+      layers?.stop();
       fallback?.stop();
       audio.onerror = audio.onended = null;
       audio.pause();
@@ -104,6 +113,7 @@ function audioNarration(media: RescueMedia, text: string, variant: Voice, muted:
     setMuted: (m) => {
       isMuted = m;
       audio.muted = m;
+      layers?.setMuted(m);
       fallback?.setMuted(m);
     },
     done,
