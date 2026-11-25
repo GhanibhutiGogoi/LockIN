@@ -36,6 +36,20 @@ beforeEach(() => {
 });
 afterEach(() => { clearPacks(); vi.restoreAllMocks(); registry.reset(); });
 
+it('keys compiled recaps by gameplay, pacing and memory context', async () => {
+  current.media = { ...current.media, compiled: true };
+  const get = (variant = DEFAULT_VARIANT, memo = 'plain') => getPack(deck, 0, variant, 1, memo);
+
+  await get();
+  await get({ ...DEFAULT_VARIANT, gameplayType: 'parkour' });
+  await get({ ...DEFAULT_VARIANT, pacing: 0.9 });
+  await get(DEFAULT_VARIANT, 'analogy');
+  await get();
+
+  expect(current.content.getScript).toHaveBeenCalledTimes(4);
+  expect(current.media.renderMedia).toHaveBeenCalledTimes(4);
+});
+
 describe('pending packs on connection changes', () => {
   it('does not send a late script from A to B or contaminate B’s cached pack', async () => {
     const a = current;

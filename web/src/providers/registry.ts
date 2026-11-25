@@ -150,7 +150,10 @@ class Registry {
   }
   get adaptive(): AdaptiveProvider {
     const c = this.config.adaptive;
-    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url) : c.mode === 'memory' ? new MemoryAdaptiveProvider() : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAdaptiveProvider() : new LocalAdaptiveProvider(() => !!this.config.media.voiceUrl))) as AdaptiveProvider;
+    return (this.cache.adaptive ??= withTrace('adaptive', c.mode === 'http' ? new HttpAdaptiveProvider(c.url)
+      : c.mode === 'memory' ? new MemoryAdaptiveProvider()
+      : c.mode === 'mock' && (import.meta.env.MODE === 'demo') ? new MockAdaptiveProvider()
+      : new LocalAdaptiveProvider(() => this.media.compiled === true))) as AdaptiveProvider;
   }
 }
 
