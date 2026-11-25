@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Deck, FocusState, GazeTracking, LapseTrigger, MemoryDecision, MemoryTopic, RescueContext, RescuePack, SessionLog, SessionReview, UserSettings, VariantChoice } from './contracts/types';
 import { DEFAULT_LOOKING_AWAY_SEC, lookingAwaySeconds } from './lib/lookingAway';
 import type { ActivityLabel } from './lib/screenActivity';
+import type { ClassificationEntry } from './screenStudy/classificationHistory';
 import type { CameraStatus } from './lib/camera';
 import { library } from './lib/library';
 import { load, save, uid } from './lib/storage';
@@ -99,6 +100,7 @@ interface AppState {
   screenSeenAt: number | null;
   screenGoal: string;
   screenActivity: ActivityLabel | 'checking' | null;
+  screenClassifications: ClassificationEntry[];
   camera: CameraStatus;
   calibrated: boolean;
   /** Version of the consent screen the user agreed to, or null. */
@@ -160,6 +162,7 @@ export const useApp = create<AppState>(() => ({
   screenSeenAt: null,
   screenGoal: '',
   screenActivity: null,
+  screenClassifications: [],
   camera: 'off',
   calibrated: load('lockin.calibrated', false),
   consent: load<string | null>('lockin.consent', null),
@@ -271,7 +274,7 @@ export const actions = {
     useApp.setState({
       decks: s.decks.filter((deck) => deck.sourceType !== 'screen'),
       deckId: s.decks.find((deck) => deck.id === s.deckId)?.sourceType === 'screen' ? '' : s.deckId,
-      slideIndex: 0, report: null, screenReading: 'idle', screenSeenAt: null, screenGoal: '', screenActivity: null,
+      slideIndex: 0, report: null, screenReading: 'idle', screenSeenAt: null, screenGoal: '', screenActivity: null, screenClassifications: [],
     });
   },
   openDeck(deckId: string) {

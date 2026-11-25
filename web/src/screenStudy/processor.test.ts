@@ -4,7 +4,7 @@ import { ScreenTimeline } from './timeline';
 
 afterEach(() => vi.unstubAllGlobals());
 
-it('prioritizes the current page and continues OCR while an older classification waits', async () => {
+it('prioritizes the current page and defers historical work until the report', async () => {
   let releaseOcr!: () => void, releaseLabel!: () => void;
   const ocrWait = new Promise<void>(resolve => { releaseOcr = resolve; });
   const labelWait = new Promise<void>(resolve => { releaseLabel = resolve; });
@@ -27,15 +27,95 @@ it('prioritizes the current page and continues OCR while an older classification
   await vi.waitFor(() => expect(ocrCount).toBe(1));
   const old = timeline.observe(1000, true, 100, 50, 'monitor'); processor.enqueue(old, new Blob());
   const current = timeline.observe(2000, true, 100, 50, 'monitor'); processor.enqueue(current, new Blob());
-  // Both queued OCR calls finish even though the first classification is blocked.
+  // The current page gets OCR; obsolete pages cannot consume the live workers.
   releaseOcr();
-  await vi.waitFor(() => { expect(current.status).toBe('ready'); expect(ocrCount).toBe(3); });
-  expect(completed).toEqual([first.id, current.id, old.id]);
+  await vi.waitFor(() => { expect(current.status).toBe('ready'); expect(ocrCount).toBe(2); });
+  expect(completed).toEqual([first.id, current.id]);
+  expect(old.status).toBe('pending');
   expect(labelCount).toBe(1);
   expect(first.label).toBe('checking');
   releaseLabel(); await processor.finish();
+  expect(completed).toEqual([first.id, current.id, old.id]);
   expect([first, old, current].every(scene => scene.label === 'off-topic')).toBe(true);
   expect(current.classificationStartedAt).toBeDefined();
+});
+
+it('starts the next live page immediately while keeping obsolete OCR out of its way', async () => {
+  const textRequests: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/status')) return new Response('{"status":"ready"}');
+    if (url.endsWith('/text')) {
+      textRequests.push(await (init!.body as Blob).text());
+      return new Response('{"lines":["Substantive body text for classification"]}');
+    }
+    return new Response('{"label":"off-topic"}');
+  }));
+  const timeline = new ScreenTimeline(0, 'Data mining');
+  const processor = new ScreenProcessor(timeline, vi.fn());
+  Object.assign(timeline.observe(0, true, 100, 50, 'monitor'), { status: 'ready', label: 'related' });
+  const old = timeline.observe(0, true, 100, 50, 'monitor');
+  const current = timeline.observe(1000, true, 100, 50, 'monitor');
+  processor.enqueue(old, new Blob(['old']));
+  processor.enqueue(current, new Blob(['current']));
+  await vi.waitFor(() => expect(current.label).toBe('off-topic'));
+  expect(textRequests).toEqual(['current']);
+  const next = timeline.observe(2000, true, 100, 50, 'monitor');
+  processor.enqueue(next, new Blob(['next']));
+  await vi.waitFor(() => expect(next.label).toBe('off-topic'));
+  expect(textRequests).toEqual(['current', 'next']);
+  // finish must also drain queues when both workers were idle at session end.
+  await processor.finish();
+  expect(textRequests).toEqual(['current', 'next', 'old']);
+});
+
+it('recovers a previously seen lesson when the current off-topic page has no recap source yet', async () => {
+  const ocrOrder: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/status')) return new Response('{"status":"ready"}');
+    if (url.endsWith('/text')) {
+      const text = await (init!.body as Blob).text();
+      ocrOrder.push(text);
+      return new Response(JSON.stringify({ lines: [text] }));
+    }
+    const text = JSON.parse(init!.body as string).text;
+    return new Response(JSON.stringify(text === 'lesson'
+      ? { label: 'related', studyText: 'Outliers are unusual observations.' } : { label: 'off-topic' }));
+  }));
+  const timeline = new ScreenTimeline(0, 'Data mining');
+  const processor = new ScreenProcessor(timeline, vi.fn());
+  const lesson = timeline.observe(0, true, 100, 50, 'monitor');
+  const email = timeline.observe(1000, true, 100, 50, 'monitor');
+  processor.enqueue(lesson, new Blob(['lesson']));
+  processor.enqueue(email, new Blob(['email']));
+  await vi.waitFor(() => expect(lesson.label).toBe('related'));
+  expect(email.label).toBe('off-topic');
+  expect(ocrOrder).toEqual(['email', 'lesson']);
+  expect(lesson.studyText).toContain('Outliers');
+  await processor.finish();
+});
+
+it('retries failed relevance on the same scene without repeating successful OCR', async () => {
+  let ocrCalls = 0, labelCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.endsWith('/status')) return new Response('{"status":"ready"}');
+    if (url.endsWith('/text')) {
+      ocrCalls++;
+      return new Response('{"lines":["A lecture about fluid flow control"]}');
+    }
+    return new Response(JSON.stringify({ label: ++labelCalls === 1 ? 'unavailable' : 'off-topic' }));
+  }));
+  const timeline = new ScreenTimeline(0, 'Data mining');
+  const scene = timeline.observe(0, true, 100, 50, 'monitor');
+  const processor = new ScreenProcessor(timeline, vi.fn());
+  processor.enqueue(scene, new Blob());
+  await vi.waitFor(() => expect(scene.label).toBe('unavailable'));
+  processor.retryClassification(scene);
+  processor.retryClassification(scene); // Duplicate ticks cannot enqueue another retry.
+  await vi.waitFor(() => expect(scene.label).toBe('off-topic'));
+  expect(ocrCalls).toBe(1);
+  expect(labelCalls).toBe(2);
+  expect(timeline.scenes).toEqual([scene]);
+  await processor.finish();
 });
 
 it('retains delayed results on their scene, preserves OCR boxes and classifies against the goal', async () => {

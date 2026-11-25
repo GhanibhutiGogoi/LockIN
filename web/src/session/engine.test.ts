@@ -120,6 +120,159 @@ async function lapseByAppSwitch() {
 }
 
 describe('session lifecycle', () => {
+  it('uses the user rest preference over AI config and resizes the active rest from the original recovery time', async () => {
+    store.actions.setSettings({ cooldownSec: 60 });
+    vi.mocked(registry.adaptive.getSessionConfig).mockResolvedValue({ cooldownSec: 300 });
+    await engine.enterStudy();
+    engine.requestRecap(); await flush(30);
+    expect(store.useApp.getState().rescue?.phase).toBe('playing');
+    engine.clipEnded(); engine.answerQuiz(0, 0); engine.finishRescue();
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    for (let i = 0; i < 50; i++) {
+      emit({ t: Date.now(), score: 100, confidence: 1 }); await advance(100);
+    }
+    const until = store.useApp.getState().live.cooldownUntil;
+    expect(until - Date.now()).toBeGreaterThan(58_000);
+    expect(until - Date.now()).toBeLessThanOrEqual(60_000);
+    store.actions.setSettings({ cooldownSec: 300 });
+    expect(store.useApp.getState().live.cooldownUntil).toBe(until + 240_000);
+    store.actions.setSettings({ cooldownSec: 60 });
+    expect(store.useApp.getState().live.cooldownUntil).toBe(until);
+    await lapseByAppSwitch();
+    expect(store.useApp.getState().rescue).toBeNull();
+    await advance(61_000);
+    expect(store.useApp.getState().rescue?.phase).toBe('playing');
+  });
+
+  it('switches glow-only on and off within a running session and preserves explicit manual recaps', async () => {
+    await engine.enterStudy();
+    store.actions.setSettings({ nudgeOnly: true });
+    await lapseByAppSwitch();
+    expect(store.useApp.getState().rescue).toBeNull();
+    expect(registry.content.getScript).not.toHaveBeenCalled();
+    h.doc.focused = true;
+    engine.requestRecap(); await flush(30);
+    expect(store.useApp.getState().rescue).toMatchObject({ phase: 'playing', trigger: 'manual' });
+    store.actions.setSettings({ nudgeOnly: false });
+    store.actions.setSettings({ nudgeOnly: true });
+    expect(store.useApp.getState().rescue?.trigger).toBe('manual');
+  });
+
+  it('cancels a pending automatic render immediately when glow-only is enabled', async () => {
+    let resolveMedia!: (media: never) => void;
+    vi.mocked(registry.media.renderMedia).mockImplementationOnce(() => new Promise(resolve => { resolveMedia = resolve; }));
+    await engine.enterStudy(); await lapseByAppSwitch();
+    expect(store.useApp.getState().rescue?.phase).toBe('loading');
+    store.actions.setSettings({ nudgeOnly: true });
+    expect(store.useApp.getState().rescue).toBeNull();
+    resolveMedia({ captions: [], durationSec: 2, broll: [] } as never); await flush(30);
+    expect(store.useApp.getState().rescue).toBeNull();
+    await advance(6000);
+    expect(store.useApp.getState().rescue).toBeNull();
+  });
+
+  it('uses current tone and roast preferences even if the adaptive provider returns its old choice', async () => {
+    await engine.enterStudy();
+    store.actions.setSettings({ slangLevel: 'plain', roastsEnabled: false });
+    const { DEFAULT_VARIANT } = await import('../contracts/defaults');
+    vi.mocked(registry.adaptive.chooseVariant).mockResolvedValue({ variant: { ...DEFAULT_VARIANT, slangLevel: 'unhinged', humourStyle: 'roasts' }, isHoldout: false });
+    engine.requestRecap(); await flush(30);
+    expect(registry.content.getScript).toHaveBeenCalledWith(expect.objectContaining({ variant: expect.objectContaining({ slangLevel: 'plain', humourStyle: 'memes' }) }), expect.anything());
+  });
+
+  it('cancels an already prepared screen recap in glow-only mode and can resume clips without restarting', async () => {
+    const share = await import('../lib/screenShare');
+    const deck = { id: 'screen-glow', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Outliers', text: 'Outliers are unusual observations.' }], slideCount: 1 };
+    store.actions.addDeck(deck); store.actions.setSettings({ lookingAwaySec: 5 });
+    store.useApp.setState({ screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    async function away(ms: number) {
+      for (let i = 0; i < ms; i += 200) {
+        emit({ t: Date.now(), score: 0, confidence: 1, gazeTracking: { state: 'away', awayMs: i, thresholdMs: 5000 } });
+        await advance(200);
+      }
+    }
+    await away(3000);
+    expect(store.useApp.getState().live.recapPreparation).toBe('ready');
+    store.actions.setSettings({ nudgeOnly: true });
+    expect(store.useApp.getState().live.recapPreparation).toBeUndefined();
+    await away(6000);
+    expect(store.useApp.getState().rescue).toBeNull();
+    expect(registry.content.getScript).toHaveBeenCalledTimes(1);
+    store.actions.setSettings({ nudgeOnly: false });
+    await away(2000);
+    expect(store.useApp.getState().rescue?.phase).toBe('playing');
+    store.actions.setSettings({ nudgeOnly: true });
+    expect(store.useApp.getState().rescue).toBeNull();
+  });
+
+  it('replaces a prepared recap when newer study material arrives before playback', async () => {
+    const share = await import('../lib/screenShare');
+    const deck = { id: 'screen-new-material', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Outliers', text: 'Global outliers deviate from the whole dataset.' }], slideCount: 1 };
+    store.actions.addDeck(deck); store.actions.setSettings({ lookingAwaySec: 5 });
+    store.useApp.setState({ screenReading: 'ready' });
+    await engine.enterStudy();
+    const source = vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    async function away(ms: number) {
+      for (let i = 0; i < ms; i += 200) {
+        emit({ t: Date.now(), score: 0, confidence: 1, gazeTracking: { state: 'away', awayMs: i, thresholdMs: 5000 } });
+        await advance(200);
+      }
+    }
+    await away(3000);
+    expect(store.useApp.getState().live.recapPreparation).toBe('ready');
+    const updated = { ...deck, slides: [{ index: 0, title: 'Contextual outliers', text: 'Contextual outliers depend on the local setting.' }] };
+    source.mockReturnValue({ deck: updated, slideIndex: 0 });
+    await away(3000);
+    expect(registry.content.getScript).toHaveBeenCalledTimes(2);
+    expect(registry.content.getScript).toHaveBeenLastCalledWith(expect.objectContaining({ slide: updated.slides[0] }), expect.anything());
+    expect(store.useApp.getState().rescue).toMatchObject({ phase: 'playing', trigger: 'gaze' });
+    expect(share.getScreenTimeline()?.events.some(e => e.type === 'preparation-source-changed')).toBe(true);
+  });
+
+  it.each([5, 67])('triggers content after %i seconds of actual screen gaze despite a delayed classification', async seconds => {
+    const share = await import('../lib/screenShare');
+    const deck = { id: `screen-content-${seconds}`, title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Outliers', text: 'Outliers are unusual observations.' }], slideCount: 1 };
+    store.actions.addDeck(deck);
+    store.actions.setSettings({ lookingAwaySec: seconds });
+    store.useApp.setState({ screenGoal: 'Outlier detection', screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const scene = share.getScreenTimeline()!.observe(Date.now(), true, 1600, 900, 'monitor');
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    const observe = async (ms: number) => {
+      for (let i = 0; i < ms; i += 200) {
+        scene.observedUntil = Date.now();
+        emit({ t: Date.now(), score: 100, confidence: 1,
+          gazeTracking: { state: 'screen', awayMs: 0, thresholdMs: seconds * 1000 } });
+        await advance(200);
+      }
+    };
+    await observe(seconds * 1000 + 1000);
+    expect(store.useApp.getState().rescue).toBeNull();
+    // A successful retry resolves the same continuously observed page.
+    Object.assign(scene, { status: 'ready', label: 'off-topic' });
+    await observe(2000);
+    expect(store.useApp.getState().rescue).toMatchObject({ phase: 'playing', trigger: 'content' });
+    expect(registry.content.getScript).toHaveBeenCalledWith(expect.objectContaining({ slide: deck.slides[0] }), expect.anything());
+    engine.clipEnded(); engine.answerQuiz(0, 0); engine.finishRescue();
+    expect(store.useApp.getState().live.state).toBe('recovering');
+    // Returning straight to unrelated content must not require a successful
+    // focused/recovery transition before another content recap can trigger.
+    Object.assign(scene, { status: 'pending', label: 'checking' });
+    await observe(seconds * 1000 + 1000);
+    expect(store.useApp.getState().rescue).toBeNull();
+    Object.assign(scene, { status: 'ready', label: 'off-topic' });
+    await observe(2000);
+    expect(store.useApp.getState().rescue).toMatchObject({ phase: 'playing', trigger: 'content' });
+  });
+
   it('updates a running screen session from a 60-second delay to 10 seconds without restarting', async () => {
     const share = await import('../lib/screenShare');
     const setDuration = vi.fn();

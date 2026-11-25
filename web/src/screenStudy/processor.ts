@@ -13,11 +13,34 @@ export class ScreenProcessor {
   private classifying?: Promise<void>;
   private controller = new AbortController();
   private sealed = false;
+  private latestClassificationTimestamp = -Infinity;
 
   constructor(private timeline: ScreenTimeline, private publish: (scene: ScreenScene) => void) {}
 
+  retryClassification(scene: ScreenScene) {
+    if (this.sealed || scene.status !== 'ready' || scene.label !== 'unavailable') return;
+    scene.label = 'checking'; scene.message = undefined; scene.classifiedAt = undefined;
+    this.labels.push(scene);
+    this.classifyNext();
+  }
+
+  private needsStudyContext() {
+    // If the learner switched before the lesson finished processing, recover
+    // that lesson after classifying the live page; a recap still needs a source.
+    return this.timeline.current?.label === 'off-topic'
+      && !this.timeline.scenes.some(scene => scene.status === 'ready' && scene.label === 'related');
+  }
+
   enqueue(scene: ScreenScene, frame: Blob) {
     if (this.sealed) { scene.status = 'skipped'; scene.label = 'unavailable'; return; }
+    // Keep a fresh pending sample for a scrolling document instead of an OCR
+    // backlog of every scroll position. An already-running request may finish.
+    this.queue = this.queue.filter(job => {
+      if (!scene.documentId || job.scene.documentId !== scene.documentId) return true;
+      job.scene.status = 'skipped'; job.scene.label = 'unavailable';
+      job.scene.message = 'Replaced by a newer sample of the same document.';
+      return false;
+    });
     if (this.queue.length >= MAX_WAITING_FRAMES) {
       const shortest = this.queue.reduce((best, job, index, jobs) =>
         job.scene.observedUntil - job.scene.timestamp < jobs[best].scene.observedUntil - jobs[best].scene.timestamp ? index : best, 0);
@@ -33,7 +56,10 @@ export class ScreenProcessor {
   private pump() {
     if (this.running || !this.queue.length) return;
     const current = this.queue.findIndex(job => job.scene === this.timeline.current);
-    const index = this.sealed ? this.queue.reduce((best, job, i, jobs) =>
+    // Historical OCR can occupy the worker for tens of seconds. Keep it for the
+    // report, but never start it while the learner may open another live page.
+    if (!this.sealed && current < 0 && !this.needsStudyContext()) return;
+    const index = this.sealed || current < 0 ? this.queue.reduce((best, job, i, jobs) =>
       job.scene.observedUntil - job.scene.timestamp > jobs[best].scene.observedUntil - jobs[best].scene.timestamp ? i : best, 0)
       : Math.max(0, current);
     const [job] = this.queue.splice(index, 1);
@@ -43,8 +69,14 @@ export class ScreenProcessor {
   private classifyNext() {
     if (this.classifying || !this.labels.length) return;
     const current = this.labels.indexOf(this.timeline.current!);
-    const [scene] = this.labels.splice(Math.max(0, current), 1);
-    this.classifying = this.classify(scene).finally(() => { this.classifying = undefined; this.classifyNext(); });
+    const newest = this.labels.reduce((best, scene, index, all) => scene.timestamp > all[best].timestamp ? index : best, 0);
+    // Scrolling must not starve the classifier: use the newest completed OCR,
+    // even when a newer frame is already being captured/recognized.
+    if (!this.sealed && current < 0 && this.labels[newest].timestamp <= this.latestClassificationTimestamp
+      && !this.needsStudyContext()) return;
+    const [scene] = this.labels.splice(current >= 0 ? current : this.sealed ? 0 : newest, 1);
+    this.latestClassificationTimestamp = Math.max(this.latestClassificationTimestamp, scene.timestamp);
+    this.classifying = this.classify(scene).finally(() => { this.classifying = undefined; this.classifyNext(); this.pump(); });
   }
 
   private async classify(scene: ScreenScene) {
@@ -118,6 +150,8 @@ export class ScreenProcessor {
 
   async finish(timeoutMs = 90_000) {
     this.sealed = true;
+    this.pump();
+    this.classifyNext();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const drain = async () => { while (this.running || this.classifying) await Promise.all([this.running, this.classifying]); };
     await Promise.race([drain(), new Promise<void>(resolve => {

@@ -3,6 +3,7 @@ import type { ScreenAnalysis, ScreenMeasurement, ScreenScene } from './types';
 import { summarizeScreenAnalysis } from './summary';
 
 export const SCENE_GAP_MS = 2500;
+export const CONTENT_EVIDENCE_MAX_AGE_MS = 60_000;
 const GAZE_GAP_MS = 1200;
 const GAZE_SUPPORT_MS = 350;
 const MAX_GAZE = 72_000;
@@ -24,13 +25,16 @@ export class ScreenTimeline {
 
   constructor(readonly startedAt: number, readonly goal: string) {}
 
-  observe(timestamp: number, changed: boolean, width: number, height: number, displaySurface: string) {
+  observe(timestamp: number, changed: boolean, width: number, height: number, displaySurface: string, sameDocument = false) {
     let scene = this.current;
     if (!scene || changed || timestamp - scene.observedUntil > SCENE_GAP_MS) {
+      const documentId = sameDocument && scene && timestamp - scene.observedUntil <= SCENE_GAP_MS
+        ? scene.documentId : undefined;
       // Hold a recently observed page until the next capture establishes a change.
       if (scene && timestamp - scene.observedUntil <= SCENE_GAP_MS) scene.observedUntil = timestamp;
       scene = { id: ++this.serial, timestamp, observedUntil: timestamp, width, height, displaySurface,
         status: 'pending', label: this.goal ? 'checking' : null };
+      scene.documentId = documentId ?? scene.id;
       this.scenes.push(scene);
       this.current = scene;
       if (this.scenes.length > MAX_SCENES) { this.scenes.shift(); this.droppedScenes++; }
@@ -75,6 +79,28 @@ export class ScreenTimeline {
     return scene && now - scene.observedUntil <= SCENE_GAP_MS ? scene : undefined;
   }
 
+  /** Reuse only bounded evidence within continuously observed navigation.
+   * Each raw scene keeps its own OCR/label; reports distinguish inferred continuity.
+   * Related/uncertain results supersede older off-topic evidence from their capture onward.
+   */
+  resolve(scene: ScreenScene, timestamp: number): ScreenScene {
+    if (!scene.documentId) return scene;
+    const decided = (s: ScreenScene) => s.classifiedAt !== undefined
+      || (s.status === 'ready' && ['related', 'off-topic', 'uncertain'].includes(s.label ?? ''));
+    if (decided(scene)) return scene;
+    // IDs are contiguous in the retained array. Scan only preceding nearby
+    // snapshots, not the entire session for every historical gaze tick.
+    const index = Math.min(this.scenes.length - 1, scene.id - (this.scenes[0]?.id ?? 0));
+    for (let i = index; i >= 0; i--) {
+      const source = this.scenes[i];
+      if (source.documentId !== scene.documentId || timestamp - source.observedUntil > CONTENT_EVIDENCE_MAX_AGE_MS) break;
+      if (source.timestamp > timestamp || !decided(source)) continue;
+      if (source.status !== 'ready' || !['related', 'off-topic'].includes(source.label ?? '')) return scene;
+      return { ...scene, status: 'ready', label: source.label, classificationSourceId: source.id };
+    }
+    return scene;
+  }
+
   analyze(endedAt: number): ScreenAnalysis {
     let measurements: ScreenMeasurement[] = [];
     let sceneIndex = 0;
@@ -95,7 +121,7 @@ export class ScreenTimeline {
         const until = Math.min(end, scene?.observedUntil ?? candidate?.timestamp ?? end);
         if (until <= timestamp) break;
         measurements.push({ timestamp, durationMs: until - timestamp, sceneId: scene?.id,
-          ...evaluate(sample, excluded, scene, !!this.goal) });
+          ...evaluate(sample, excluded, scene ? this.resolve(scene, timestamp) : undefined, !!this.goal) });
         timestamp = until;
       }
     }
@@ -140,7 +166,7 @@ export class ScreenTimeline {
   }
 }
 
-function evaluate(sample: FocusSample, excluded: boolean, scene: ScreenScene | undefined, goal: boolean): Pick<ScreenMeasurement, 'evidence' | 'reason' | 'textRegion'> {
+function evaluate(sample: FocusSample, excluded: boolean, scene: ScreenScene | undefined, goal: boolean): Pick<ScreenMeasurement, 'evidence' | 'reason' | 'textRegion' | 'contentSourceSceneId'> {
   if (excluded) return { evidence: 'excluded', reason: 'paused-rescue-or-notes' };
   const gaze = sample.gazeTracking;
   if (sample.confidence < .3 || !gaze || gaze.state === 'unknown') return { evidence: 'unknown', reason: 'gaze-unavailable' };
@@ -150,9 +176,12 @@ function evaluate(sample: FocusSample, excluded: boolean, scene: ScreenScene | u
   if (gaze.state !== 'screen') return { evidence: 'unknown', reason: 'gaze-recovering' };
   if (!scene || scene.status !== 'ready') return { evidence: 'unknown', reason: scene?.status ?? 'screen-unobserved' };
   const textRegion = region(sample, scene);
-  if (goal && scene.label === 'off-topic') return { evidence: 'off-topic', reason: 'unrelated-content', textRegion };
+  if (goal && scene.label === 'off-topic') return { evidence: 'off-topic',
+    reason: scene.classificationSourceId ? 'same-document-off-topic' : 'unrelated-content',
+    contentSourceSceneId: scene.classificationSourceId, textRegion };
   if (goal && scene.label !== 'related') return { evidence: 'unknown', reason: `content-${scene.label}`, textRegion };
-  return { evidence: 'focused', reason: 'screen-gaze-and-study-context', textRegion };
+  return { evidence: 'focused', reason: scene.classificationSourceId ? 'same-document-study' : 'screen-gaze-and-study-context',
+    contentSourceSceneId: scene.classificationSourceId, textRegion };
 }
 
 /** OCR overlap is a diagnostic, not proof of attention: figures and whitespace matter. */

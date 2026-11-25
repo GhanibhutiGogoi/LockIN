@@ -173,3 +173,89 @@ Screen sharing uses this delay for both looking away and confirmed off-topic
 pages. The gaze countdown, screen intervention gate, and local gaze monitor use
 the same value. Short settings do not guarantee immediate video playback: the
 recap must also finish generating, and cooldown and note-taking rules still apply.
+
+## Live off-topic classification
+
+During a session, queued OCR and relevance work prioritizes the current scene.
+An in-flight request may finish, but old queued pages wait until report generation
+instead of occupying the local models while the learner opens another page. The
+bounded historical queues still retain longer visits; report draining starts even
+when the live workers are idle. If the current page is confirmed off-topic but no
+lesson has been recognized yet, older pages are processed to recover a recap source.
+A failed request on an unchanged page retries on
+the same scene, preserving actual gaze observations for delayed classification.
+If OCR already succeeded, only relevance classification is retried.
+
+Outlook reading-pane anchors exclude the message list and toolbar from relevance
+evidence. OCR retains up to 192 blocks so busy application chrome is less likely
+to exhaust the budget before the document body. No matching label is copied onto
+a different, unread page. Unknown tracking and unclassified pages cannot trigger.
+
+Run `node scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --email` from `web`
+for a controlled screen/gaze replay with real OCR, relevance, narration and media.
+It reads relevant study material first, then an unrelated lecture email, verifies
+the content trigger and actual playback, answers the quiz and returns to study.
+Timings are saved to `.runtime/windows/email-playback-timing.json` at the repo root.
+
+## Continuous reading while scrolling or turning pages
+
+Screen changes remain separate raw OCR scenes, but a stable, nonblank navigation
+area links them with a `documentId`. The comparison excludes the floating timer
+at the top right. Navigation changes, capture interruptions and session boundaries
+start a new document. Blank navigation never establishes continuity.
+
+The classifier now consumes the newest completed OCR even if the screen has
+already scrolled again. This prevents live classification starvation. Within a
+continuous document, actual gaze observations may use the latest preceding
+classification for at most 60 seconds after that source frame was last observed.
+Newer related, uncertain or failed decisions supersede the old decision; no label
+is copied across document boundaries. Fresh screenshots continue to be classified.
+This is a bounded inference from stable navigation, not proof that all visible
+text is identical; in-place topic changes are detected by the repeated classifier.
+
+Reports retain each screenshot's original status/label. Derived measurements use
+`same-document-off-topic` / `same-document-study` and `contentSourceSceneId` to
+distinguish continuity evidence from a direct classification. Missing gaze, notes,
+cooldown and the user's configured duration keep their existing behavior.
+
+`node scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --scrolling` exercises
+continuous novel scrolling and page turns with real OCR, classification and media,
+followed by the quiz and return to relevant study content. Controlled gaze is used;
+results go to `scrolling-playback-timing.json` and `browser-scrolling.json` under
+`.runtime/windows/`. This verifies moving pages rather than a static screenshot.
+
+### Noisy browser headers and Chinese video sites
+
+Once OCR locates an address bar, continuity follows that pixel region instead of
+browser tabs, bookmark folders, news widgets and LockIn's status messages. Small
+window translations are tolerated. For WPS, detected progress/page counters and
+LockIn messages are masked while file tabs remain checked. A bounded in-memory
+probe buffer lets late OCR repair provisional scroll groups only when every
+intermediate probe matches; an intervening navigation or capture break is never
+bridged. Probe pixels are not exported. Pending OCR samples from the same document
+are replaced with the newest sample rather than accumulating every scroll position.
+
+The local relevance prompt uses a conservative 320-token estimated content budget
+(CJK is weighted more heavily than English), with bounded excerpts for long blocks.
+Video-site navigation, counters and bylines are excluded. Timeouts have a distinct
+`model-timeout` reason, rather than an indistinguishable request failure.
+
+### Subsequent recap selection
+
+Screen recaps use the latest recognized related study text. A new confirmed study
+source invalidates a prepared or preparing recap from the older source before
+playback; the `preparation-source-changed` event records the change. The next
+qualified distraction prepares the new source. Repeated observation of identical
+normalized text can reuse the cache. Script keys include the content, session deck,
+length/style/quiz/depth and memory memo; voice and pacing also affect media keys.
+The ordinal number of the distraction is not itself a request for a new script.
+
+Use `--scrolling --recovery` in the replay harness for two content-triggered recaps,
+with a different relevant lesson between them and continuously changing header
+widgets. Only that isolated browser disables cooldown; normal sessions keep the
+configured cooldown and require the configured distraction duration and ready media.
+
+`--video-grid` adds a dense Chinese recommendation grid to exercise OCR and relevance
+concurrently under scrolling load, with results in `video-grid-playback-timing.json`
+and `browser-video-grid.json`. Video grids may be classified from multiple descriptive
+titles without requiring one long prose paragraph. Website menus alone are not evidence.

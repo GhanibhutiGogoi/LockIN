@@ -7,8 +7,11 @@ import { join } from 'node:path';
 
 const url = process.argv[2] ?? 'http://127.0.0.1:5181/';
 const recoveryMode = process.argv.includes('--recovery');
+const gridMode = process.argv.includes('--video-grid');
+const scrollingMode = process.argv.includes('--scrolling') || gridMode;
+const emailMode = process.argv.includes('--email') || scrollingMode;
 const deadlineMode = process.argv.includes('--deadline') || recoveryMode;
-const realMedia = deadlineMode || process.argv.includes('--real-media');
+const realMedia = deadlineMode || emailMode || process.argv.includes('--real-media');
 const voiceFile = new URL('../../.runtime/windows/narration-url.txt', import.meta.url);
 const voiceUrl = process.env.LOCKIN_TEST_VOICE_URL ?? (existsSync(voiceFile) ? readFileSync(voiceFile, 'utf8').trim() : 'http://127.0.0.1:18114/');
 assert.ok(['127.0.0.1', 'localhost'].includes(new URL(url).hostname));
@@ -20,15 +23,24 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true, args:
 
 try {
   const context = await browser.newContext();
-  await context.addInitScript(() => {
+  await context.addInitScript(({ scrollingMode, gridMode }) => {
     localStorage.setItem('lockin.integrations.v2', JSON.stringify({ attention: { mode: 'off', url: '' }, adaptive: { mode: 'local', url: '' } }));
     const study = ['Data Mining', 'Outlier detection identifies unusual observations.', 'A boxplot shows the median and interquartile range.'];
+    const nextStudy = ['Density-based outlier detection', 'Local Outlier Factor compares neighborhood density.', 'Low density relative to neighbors signals an outlier.'];
     const shopping = ['Shopping cart', 'Summer dresses 50 percent off. Buy two shirts.', 'Checkout now with your credit card.'];
-    const state = { focus: false, gaze: 'screen', lines: study, emitters: new Set(), timer: null, since: Date.now() };
+    const email = ['University Forum: HydroGym', 'Transferable flow-control priors',
+      'Reinforcement learning for fluid flow control.', 'A lecture on laminar and turbulent flows.'];
+    const novel = [
+      ['Chapter One: The Moonlit Castle', 'Princess Mira opened the ancient wooden door.', 'A silver dragon slept beneath the tower.', 'The knight whispered: our journey begins tonight.'],
+      ['Chapter Two: The Enchanted Forest', 'Mira followed the wizard into the dark woods.', 'An enchanted sword glowed beside the river.', 'The dragon promised to protect the lost kingdom.'],
+      ['Chapter Three: The Hidden Crown', 'The knight found a golden crown under the stars.', 'Mira heard footsteps in the empty palace.', 'The wizard vanished through a secret passage.'],
+    ];
+    const state = { focus: false, gaze: 'screen', lines: study, studyVersion: 0, content: 'study', contentAt: Date.now(), emitters: new Set(), timer: null, since: Date.now() };
     window.flow = {
       state,
       look(value) { state.gaze = value; state.since = Date.now(); },
-      content(value) { state.lines = value === 'study' ? study : shopping; },
+      nextLesson() { state.studyVersion = 1; },
+      content(value) { state.content = value; state.contentAt = Date.now(); state.lines = value === 'study' ? (state.studyVersion ? nextStudy : study) : value === 'email' ? email : shopping; },
       focus(value) { state.focus = value; window.dispatchEvent(new Event('focus')); },
     };
     document.hasFocus = () => state.focus;
@@ -38,7 +50,34 @@ try {
       const draw = () => {
         ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1280, 720);
         ctx.fillStyle = 'black'; ctx.font = '36px sans-serif';
-        state.lines.forEach((line, i) => ctx.fillText(line, 45, 100 + i * 100));
+        if (scrollingMode) {
+          ctx.font = '24px sans-serif';
+          ctx.fillText(state.content === 'novel' ? 'Novel reader - The Moonlit Castle' : 'Course reader - Outlier detection', 35, 30);
+          ctx.fillText(state.content === 'novel' ? 'https://reader.example/book/moonlit-castle' : 'https://course.example/outliers', 35, 65);
+          // Reproduce a browser news widget and a changing LockIn recovery hint.
+          // These used to break whole-header continuity on every capture.
+          ctx.font = '18px sans-serif';
+          ctx.fillText(`News update ${Math.floor(Date.now() / 500)}`, 850, 65);
+          ctx.fillText(`Checking the shared page ${Math.floor(Date.now() / 1000)}`, 10, 100);
+          ctx.font = '32px sans-serif';
+          const elapsed = Date.now() - state.contentAt;
+          const lines = state.content === 'novel' ? novel[Math.floor(elapsed / 2500) % novel.length] : state.lines;
+          const offset = state.content === 'novel' ? (elapsed % 2500) / 40 : 0;
+          if (gridMode && state.content === 'novel') {
+            const titles = ['探访世界各地的美食与生活', '旅行纪录片：城市里的烟火人间', '谁能锻造最强武器挑战赛', '音乐现场：爵士乐的奇妙夜晚', '野生动物纪录片：森林的秘密', '跟着旅行家探索陌生的城市'];
+            ctx.font = '18px "Microsoft YaHei", sans-serif';
+            ctx.fillText('首页 番剧 直播 游戏中心 会员购 漫画 赛事 下载客户端', 30, 130);
+            for (let row = 0; row < 6; row++) for (let col = 0; col < 4; col++) {
+              const x = 25 + col * 310, y = 165 + row * 105 - offset;
+              ctx.fillStyle = `hsl(${(row * 45 + col * 70 + Math.floor(elapsed / 2500) * 30) % 360} 45% 75%)`;
+              ctx.fillRect(x, y, 290, 35);
+              ctx.fillStyle = 'black';
+              ctx.fillText(titles[(row + col + Math.floor(elapsed / 2500)) % titles.length], x, y + 55);
+              ctx.fillText('UP主 旅行日记', x, y + 75);
+              ctx.fillText('1.2万次观看 · 昨天发布', x, y + 95);
+            }
+          } else lines.forEach((line, i) => ctx.fillText(line, 45, 180 + i * 100 - offset));
+        } else state.lines.forEach((line, i) => ctx.fillText(line, 45, 100 + i * 100));
       };
       draw(); clearInterval(state.timer); state.timer = setInterval(draw, 200);
       const stream = canvas.captureStream(5);
@@ -47,7 +86,7 @@ try {
       track.getSettings = () => ({ ...settings(), displaySurface: 'monitor' });
       return stream;
     };
-  });
+  }, { scrollingMode, gridMode });
   const page = await context.newPage();
   page.setDefaultTimeout(90_000);
   const errors = [];
@@ -110,7 +149,7 @@ try {
     await page.locator('[data-screen-activity="related"]').waitFor({ timeout: 90_000 });
     console.log('PASS: external study screen read and classified.');
   }
-  async function completeRescue() {
+  async function completeRescue(nextLesson = false) {
     const deadline = Date.now() + (realMedia ? 420_000 : 45_000);
     let lastStatus = Date.now();
     let phase;
@@ -140,7 +179,7 @@ try {
     await answers.waitFor({ timeout: realMedia ? 120_000 : 15_000 });
     await answers.getByRole('button').first().click();
     await page.getByRole('button', { name: /Back to/ }).click();
-    await page.evaluate(() => { window.flow.look('screen'); window.flow.content('study'); window.flow.focus(false); });
+    await page.evaluate(next => { if (next) window.flow.nextLesson(); window.flow.look('screen'); window.flow.content('study'); window.flow.focus(false); }, nextLesson);
     await page.locator('[data-screen-activity="related"]').waitFor({ timeout: 60_000 });
     await page.waitForTimeout(6500);
     console.log('PASS: actual media playback -> answer -> return to study.');
@@ -161,7 +200,8 @@ try {
     assert.ok(report.log.gazeTrace.samples.length > 0);
     assert.equal(report.log.rescues[0].context.trigger, name);
     assert.equal(report.questions.length, recoveryMode ? 2 : 1);
-    if (recoveryMode) assert.deepEqual(report.log.rescues.map(r => r.context.trigger), ['gaze', 'content']);
+    if (recoveryMode) assert.deepEqual(report.log.rescues.map(r => r.context.trigger), scrollingMode ? ['content', 'content'] : ['gaze', 'content']);
+    if (scrollingMode && recoveryMode) assert.notEqual(report.log.rescues[0].context.slideIndex, report.log.rescues[1].context.slideIndex, 'Second recap must use the newer lesson');
     assert.ok(report.log.screenAnalysis.windows.some(w => w.focusedMs > 0));
     const { summary, measurements, events } = report.log.screenAnalysis;
     assert.ok(summary.focusedMs > 5000);
@@ -170,12 +210,47 @@ try {
       .reduce((total, m) => total + m.durationMs, 0);
     assert.ok(postRecapFocusMs >= 5000, `Only ${postRecapFocusMs}ms focused after returning to study`);
     await page.getByText(/After your last recap:/).waitFor();
-    writeFileSync(new URL(`../../.runtime/windows/browser-${recoveryMode ? 'recovery' : name}.json`, import.meta.url), JSON.stringify(report, null, 2));
+    writeFileSync(new URL(`../../.runtime/windows/browser-${gridMode ? 'video-grid' : scrollingMode ? 'scrolling' : recoveryMode ? 'recovery' : name}.json`, import.meta.url), JSON.stringify(report, null, 2));
     console.log(`PASS: ${name} report, aligned measurements and timestamp export.`);
   }
 
   await start();
-  if (realMedia) {
+  if (emailMode) {
+    const openedAt = await page.evaluate(scrolling => { window.flow.content(scrolling ? 'novel' : 'email'); return Date.now(); }, scrollingMode);
+    await page.waitForFunction(async () => (await import('/src/store.ts')).useApp.getState().live.screenDwellMs > 1000, { timeout: 90_000 });
+    await completeRescue(scrollingMode && recoveryMode);
+    const analysis = await page.evaluate(async () => {
+      const t = (await import('/src/lib/screenShare.ts')).getScreenTimeline();
+      return { events: t.events, scenes: t.scenes, controls: t.controlSamples };
+    });
+    const eventAt = type => analysis.events.find(e => e.type === type)?.timestamp;
+    assert.ok(eventAt('playback-confirmed'), 'Real narration must actually start');
+    assert.equal(analysis.events.find(e => e.type === 'playback-requested')?.detail, 'content');
+    assert.ok(analysis.controls.some(c => c.dwellMs >= 30_000));
+    const emailScene = analysis.scenes.find(s => s.timestamp >= openedAt && s.label === 'off-topic');
+    assert.ok(emailScene);
+    if (scrollingMode) {
+      const frames = analysis.scenes.filter(s => s.documentId === emailScene.documentId);
+      assert.ok(frames.length >= 10, 'Exercise repeated scrolling/page turns, not a static page');
+      assert.ok(analysis.controls.some(c => c.dwellMs >= 30_000));
+      console.log('SCROLLING FRAMES', frames.length, 'DOCUMENT', emailScene.documentId);
+    }
+    const timing = { openedAt, classificationSeconds: (emailScene.classifiedAt - openedAt) / 1000,
+      playbackRequestSeconds: (eventAt('playback-requested') - openedAt) / 1000,
+      actualPlaybackSeconds: (eventAt('playback-confirmed') - openedAt) / 1000,
+      serviceTimings, events: analysis.events };
+    writeFileSync(new URL(`../../.runtime/windows/${gridMode ? 'video-grid' : scrollingMode ? 'scrolling' : 'email'}-playback-timing.json`, import.meta.url), JSON.stringify(timing, null, 2));
+    console.log(gridMode ? 'VIDEO GRID TIMING' : scrollingMode ? 'SCROLLING TIMING' : 'EMAIL TIMING', JSON.stringify(timing));
+    if (scrollingMode && recoveryMode) {
+      assert.equal(await page.evaluate(async () => (await import('/src/store.ts')).useApp.getState().live.state), 'focused');
+      await page.evaluate(() => { window.flow.content('novel'); window.flow.focus(false); });
+      await completeRescue();
+      console.log('PASS: newer lesson -> second scrolling distraction -> second real recap. Test cooldown disabled.');
+    }
+    await finish('content');
+    assert.deepEqual(errors, []);
+    console.log(`PASS: ${gridMode ? 'continuously scrolling a dense Chinese video grid' : scrollingMode ? 'continuously scrolling and turning novel pages' : 'looking at an unrelated lecture email'} -> real OCR/classification -> real media -> playback -> quiz -> recovery.`);
+  } else if (realMedia) {
     const awayStartedAt = await page.evaluate(deadlineMode => { window.flow.look('away'); if (deadlineMode) window.flow.focus(true); return Date.now(); }, deadlineMode);
     if (!deadlineMode) {
       await page.waitForTimeout(35_000);

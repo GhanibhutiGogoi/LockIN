@@ -64,7 +64,7 @@ def main():
                     continue
                 blocks.append({'text': text[:240], 'confidence': round(float(score), 4),
                                'polygon': [[int(x), int(y)] for x, y in polygon]})
-                if len(blocks) >= 96:
+                if len(blocks) >= 192:
                     break
             emit({'status': 'ready' if blocks else 'no-text',
                   'lines': [block['text'] for block in blocks], 'blocks': blocks,

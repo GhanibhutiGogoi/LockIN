@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import time
 from threading import Lock
 from typing import Annotated, Literal
 
@@ -55,7 +56,7 @@ class ActivityInput(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     goal: Annotated[str, Field(min_length=1, max_length=300)]
     text: Annotated[str, Field(max_length=2400)]
-    blocks: Annotated[list[OCRBlock], Field(max_length=96)] | None = None
+    blocks: Annotated[list[OCRBlock], Field(max_length=192)] | None = None
     image: OCRImage | None = None
 
 
@@ -71,7 +72,10 @@ CHROME = re.compile(
     r'^stop sharing$|^停止分享$|^finish$|^(studying\s+)?\d+:\d+|https?[:：]//|正在共享您的屏幕|\.pdf\b|'
     r'WPS\s*(Office|AI)|^三文件|^开始插入|PDF转|旋转文档|连续阅读|阅读与编辑|'
     r'^扫描件编辑$|^阅读模式$|'
-    r'选择要预览|全文翻译|^\d{4}/\d|^\d+个项目|[×].*[×])'
+    r'选择要预览|全文翻译|^\d{4}/\d|^\d+个项目|[×].*[×]|'
+    r'番剧\s*直播\s*游戏中心|会员购.*下载客户端|^已关注|'
+    r'^\d[\d.万亿]*\s*(?:点赞|播放|人感兴趣|人评分)|'
+    r'^checking the shared page|^last detected text$|(?:播出|出)时间[:：].*\d)'
 )
 
 # Only UI-specific anchors define a header, never a topic word or a lesson filename.
@@ -81,6 +85,13 @@ HEADER_CONTROL = re.compile(
     r'连续阅读|阅读与编辑|^阅读模式$|^编辑页面|^工具保护|'
     r'^(?:https?[:：]//|(?:www\.)[\w.-]+)|'
     r'^(?:File\s+Edit\s+View|Home\s+Insert|Reading mode)\b)'
+)
+
+MAIL_CONTROL = re.compile(
+    r'(?i)^(?:Unread|Delete(?: Archive)?|Archive|Report(?: junk| phishing)?|'
+    r'Reply(?: all)?|Forward|Respond|Sweep|Move|Quick steps|Tags|'
+    r'Categorize|Flag|Pin|Copilot|Teams|Summarize this email|View Help|'
+    r'Focused|Other|Favorites|Go to Groups|Search|New|Home|File|Outlook)$'
 )
 
 
@@ -107,29 +118,55 @@ def document_text(body: ActivityInput) -> tuple[str, dict]:
             anchors.append(b)
     boundary = max((max(y for _, y in b.polygon) for b in anchors), default=-1)
     retained = [b for b in valid if sum(y for _, y in b.polygon) / len(b.polygon) > boundary]
+    # Outlook's reading pane has its own anchor. Restrict to that pane, rather
+    # than mixing an open email with subjects/previews in the message list.
+    pane = next((b for b in retained if re.search(r'Summarize this email\s*$', b.text.strip(), re.I)
+                 and min(x for x, _ in b.polygon) > width * .2), None)
+    if pane:
+        left = min(x for x, _ in pane.polygon) - width * .025
+        top = min(y for _, y in pane.polygon) - height * .075
+        retained = [b for b in retained if min(x for x, _ in b.polygon) >= left
+                    and min(y for _, y in b.polygon) >= top]
+    retained = [b for b in retained if not MAIL_CONTROL.fullmatch(b.text.strip())]
     # Filter before truncating: labels in the header must not consume the body budget.
     # Keep short text here for the unopened-inbox guard; content_blocks runs later.
     text = '\n'.join(b.text for b in retained)[:2400]
     return text, {'method': 'ocr-layout', 'excludedBlocks': len(body.blocks) - len(retained),
-                  'headerBottomRatio': max(0, boundary) / height}
+                  'headerBottomRatio': max(0, boundary) / height,
+                  'readingPane': bool(pane)}
 
 
 def content_blocks(text: str) -> list[str]:
     """Remove known application chrome without changing the retained OCR text."""
     return list(dict.fromkeys(line.strip() for line in text.splitlines()
-                             if len(line.strip()) >= 4 and not CHROME.search(line)))
+                             if len(line.strip()) >= 4 and not CHROME.search(line)
+                             and not MAIL_CONTROL.fullmatch(line.strip())))
 
 
 def model_blocks(blocks: list[str]) -> list[dict]:
-    """Bound CPU prompt cost, retaining headings and substantive lines with original IDs."""
+    """Bound multilingual token cost, not characters (Chinese needs more tokens)."""
     selected = []
-    remaining = 1100
+    remaining = 320
     order = list(range(min(2, len(blocks)))) + sorted(range(2, len(blocks)), key=lambda i: -len(blocks[i]))
     for i in order:
-        if len(blocks[i]) + 12 <= remaining:
-            selected.append(i)
-            remaining -= len(blocks[i]) + 12
-    return [{'id': i, 'text': blocks[i]} for i in sorted(selected)]
+        text = blocks[i]
+        # Avoid spending the budget on counters, short folder labels and UI
+        # fragments. Keep descriptive titles and body passages.
+        if len(re.findall(r'[A-Za-z]', text)) < 10 and len(re.findall(r'[\u4e00-\u9fff]', text)) < 8:
+            continue
+        while prompt_cost(text) > 160:
+            text = text[:-1]
+        cost = prompt_cost(text) + 12
+        if cost <= remaining:
+            selected.append({'id': i, 'text': text})
+            remaining -= cost
+    return sorted(selected, key=lambda block: block['id'])
+
+
+def prompt_cost(text: str) -> float:
+    # Conservative estimate: CJK characters frequently occupy multiple tokens,
+    # while English words share tokens. JSON block overhead is added by the caller.
+    return sum(2 if ord(c) > 127 else 1 / 3 for c in text)
 
 
 class ActivityModel:
@@ -143,11 +180,15 @@ class ActivityModel:
         return self.analyze(goal, text)['label']
 
     def analyze(self, goal: str, text: str) -> dict:
+        started = time.perf_counter()
         blocks = content_blocks(text)
         visible_blocks = model_blocks(blocks)
         result = {'label': 'uncertain', 'reason': 'insufficient-content', 'evidence': [],
                   'studyText': '', 'rawDecision': None}
-        if not visible_blocks or not any(len(line) >= 35 or len(re.findall(r'[\u4e00-\u9fff]', line)) >= 12 for line in blocks):
+        passages = any(len(line) >= 35 or len(re.findall(r'[\u4e00-\u9fff]', line)) >= 12 for line in blocks)
+        # Video grids contain many descriptive titles, not a prose paragraph.
+        title_grid = sum(len(re.findall(r'[\u4e00-\u9fff]', b['text'])) >= 8 for b in visible_blocks) >= 3
+        if not visible_blocks or not (passages or title_grid):
             return result
         if not self.busy.acquire(blocking=False):
             return {**result, 'label': 'unavailable', 'reason': 'model-busy'}
@@ -156,7 +197,7 @@ class ActivityModel:
                 response = client.post(self.url, json={
                     'model': MODEL_ALIAS,
                     'temperature': 0,
-                    'max_tokens': 96,
+                    'max_tokens': 64,
                     'response_format': {
                         'type': 'json_schema',
                         'json_schema': {'name': 'activity', 'strict': True, 'schema': ModelDecision.model_json_schema()},
@@ -184,7 +225,12 @@ class ActivityModel:
                 return {**result, 'reason': 'invalid-evidence-ids'}
             return {**result, 'label': decision.label, 'reason': 'grounded-blocks',
                     'evidence': [{'id': i, 'text': blocks[i]} for i in decision.block_ids],
-                    'studyText': '\n'.join(blocks) if decision.label == 'related' else ''}
+                    'studyText': '\n'.join(blocks) if decision.label == 'related' else '',
+                    'durationMs': round((time.perf_counter() - started) * 1000),
+                    'inputBlocks': len(visible_blocks)}
+        except httpx.TimeoutException:
+            return {**result, 'label': 'unavailable', 'reason': 'model-timeout',
+                    'durationMs': round((time.perf_counter() - started) * 1000)}
         except httpx.HTTPError:
             return {**result, 'label': 'unavailable', 'reason': 'model-request-failed'}
         except (ValueError, KeyError, TypeError, IndexError):

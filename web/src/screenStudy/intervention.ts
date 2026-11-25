@@ -14,7 +14,8 @@ const UNKNOWN_GRACE_MS = 5000;
 export class ScreenIntervention {
   private history: { input: Observation; now: number }[] = [];
 
-  update(input: Observation, now: number, thresholdMs = PLAY_AFTER_MS) {
+  update(input: Observation, now: number, thresholdMs = PLAY_AFTER_MS,
+    resolve: (scene: ScreenScene, timestamp: number) => ScreenScene = scene => scene) {
     // Keep actual gaze/scene observations, not an assumed risk while OCR is pending.
     // Resolved scene labels can then explain earlier observations without counting
     // missing gaze, a different page, or the time spent watching a recap.
@@ -27,7 +28,8 @@ export class ScreenIntervention {
       const observation = entry.input;
       let evidence: Evidence;
       if (observation !== null && typeof observation === 'object') {
-        const { scene, goalRequired } = observation;
+        const { goalRequired } = observation;
+        const scene = resolve(observation.scene, entry.now);
         evidence = scene.status !== 'ready' ? 'unknown'
           : !goalRequired || scene.label === 'related' ? null
           : scene.label === 'off-topic' ? 'content' : 'unknown';

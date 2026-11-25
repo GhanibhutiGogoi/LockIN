@@ -124,7 +124,7 @@ export function StudyScreen() {
     <div className="relative h-full overflow-hidden bg-desk" data-study>
       {/* the slide is the room: chrome floats at the edges and leaves when you read */}
       <main className="absolute inset-0 px-3 pt-16 pb-16 sm:px-6 md:px-20">
-        {screenStudy ? <ScreenStudyPanel text={slide?.text} /> : slide && <SlideView deck={deck} slide={slide} />}
+        {screenStudy ? <ScreenStudyPanel /> : slide && <SlideView deck={deck} slide={slide} />}
       </main>
       {!screenStudy && !slide?.text.trim() && <p role="status" className="absolute inset-x-4 top-16 z-10 bg-sheet px-4 py-2 text-center text-[14px] text-graphite">This slide has no selectable text. You can read it here; AI recaps need a text-based PDF.</p>}
       {deck.pdfUrl && (
@@ -179,7 +179,7 @@ export function StudyScreen() {
   );
 }
 
-function ScreenStudyPanel({ text }: { text?: string }) {
+function ScreenStudyPanel() {
   const awaySeconds = useApp(s => lookingAwaySeconds(s.settings.lookingAwaySec));
   const live = useApp(s => s.live);
   const cooldown = Math.max(0, Math.ceil((live.cooldownUntil - Date.now()) / 1000));
@@ -189,6 +189,7 @@ function ScreenStudyPanel({ text }: { text?: string }) {
   const status = useApp((s) => s.screenReading);
   const goal = useApp((s) => s.screenGoal);
   const activity = useApp((s) => s.screenActivity);
+  const classifications = useApp(s => s.screenClassifications);
   const activityLabel = {
     related: 'Study-related',
     'off-topic': 'Possibly off-topic',
@@ -232,10 +233,16 @@ function ScreenStudyPanel({ text }: { text?: string }) {
           )}
         </dl>
       )}
-      {text && (status === 'ready' || status === 'on-lockin') && (
+      {classifications.length > 0 && (
         <div className="mt-5 border-t border-rule-strong pt-4">
-          <h2 className="text-[15px] font-semibold">{status === 'on-lockin' ? 'Last detected text' : 'Detected text'}</h2>
-          <p className="mt-2 line-clamp-8 whitespace-pre-line text-[16px] text-graphite" data-screen-text>{text}</p>
+          <h2 className="text-[15px] font-semibold">Recent activity checks</h2>
+          <p className="mt-1 text-sm text-graphite">Latest five results · time checked</p>
+          <ol className="mt-3 space-y-2 text-[16px] text-graphite" data-screen-classifications>
+            {classifications.map(item => <li key={item.sceneId} data-classification={item.label}>
+              <time dateTime={new Date(item.at).toISOString()} className="tabular-nums">{new Date(item.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</time>
+              {' · '}{({ related: 'Related', 'off-topic': 'Off-topic', uncertain: 'Uncertain' })[item.label]}
+            </li>)}
+          </ol>
         </div>
       )}
       <button

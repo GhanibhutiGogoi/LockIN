@@ -59,27 +59,37 @@ try {
   const notifications = page.getByRole('checkbox', { name: /Call me back/ });
   if (await notifications.count()) await notifications.uncheck();
   await page.getByRole('button', { name: 'I agree, start studying' }).click();
-  const detected = page.locator('[data-screen-text]');
-  await detected.filter({ hasText: expected }).waitFor({ timeout: 120_000 });
-  if (!screenshot) assert.match(await detected.innerText(), /\u6570\u636e\u6316\u6398/);
+  // OCR content remains in session state; the UI now shows classification history.
+  await page.evaluate(async () => { window.ocrTestStore = (await import('/src/store.ts')).useApp; });
+  const detectedText = () => page.evaluate(() => {
+    const s = window.ocrTestStore.getState();
+    return s.decks.find(d => d.id === s.deckId)?.slides[s.slideIndex]?.text ?? '';
+  });
+  const waitForText = (text, timeout) => page.waitForFunction(expected => {
+    const s = window.ocrTestStore.getState();
+    const text = s.decks.find(d => d.id === s.deckId)?.slides[s.slideIndex]?.text ?? '';
+    return ['ready', 'on-lockin'].includes(s.screenReading) && text.includes(expected);
+  }, text, { timeout });
+  await waitForText(expected, 120_000);
+  if (!screenshot) assert.match(await detectedText(), /\u6570\u636e\u6316\u6398/);
   await page.evaluate(() => window.ocrReplay.draw(['Regression and classification']));
-  await detected.filter({ hasText: 'Regression' }).waitFor({ timeout: 15_000 });
+  await waitForText('Regression', 15_000);
   await page.keyboard.press('p');
   await page.getByText('Screen reading paused', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.ocrReplay.enabled()), false);
   await page.keyboard.press('p');
-  await detected.filter({ hasText: 'Regression' }).waitFor({ timeout: 15_000 });
+  await waitForText('Regression', 15_000);
   await page.evaluate(() => window.ocrReplay.draw([]));
   await page.getByText('No readable text on the shared screen.', { exact: true }).waitFor({ timeout: 15_000 });
   await page.route('**/v1/web-screen/status', route => route.fulfill({ status: 503, body: '{}' }));
   await page.locator('[data-screen-ocr]').filter({ hasText: 'unavailable' }).waitFor({ timeout: 10_000 });
   await page.unroute('**/v1/web-screen/status');
   await page.evaluate(() => window.ocrReplay.draw(['Recovery after service failure']));
-  await detected.filter({ hasText: 'Recovery' }).waitFor({ timeout: 15_000 });
+  await waitForText('Recovery', 15_000);
   // Screen sessions retain the current text, not every previous captured page.
   if (screenshot) {
     await page.evaluate(() => window.ocrReplay.restoreCapture());
-    await detected.filter({ hasText: expected }).waitFor({ timeout: 40_000 });
+    await waitForText(expected, 40_000);
   }
   await page.getByRole('button', { name: 'Stop sharing', exact: true }).click();
   assert.equal(await page.evaluate(() => window.ocrReplay.state()), 'ended');

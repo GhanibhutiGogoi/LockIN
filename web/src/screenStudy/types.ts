@@ -8,6 +8,8 @@ export interface TextBlock {
 
 export interface ScreenScene {
   id: number;
+  documentId?: number;
+  classificationSourceId?: number;
   timestamp: number;
   observedUntil: number;
   width: number;
@@ -38,6 +40,7 @@ export interface ScreenMeasurement {
   evidence: AttentionEvidence;
   reason: string;
   textRegion?: 'overlap' | 'outside' | 'unmapped';
+  contentSourceSceneId?: number;
 }
 
 export interface AttentionWindow {

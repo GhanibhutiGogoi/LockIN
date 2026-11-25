@@ -15,6 +15,10 @@ import { registry } from '../providers/registry';
 
 export { DEFAULT_VARIANT };
 
+export const screenSourceKey = (deck: Deck, slideIndex: number) => JSON.stringify([
+  deck.id, deck.slides[slideIndex]?.text.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim(),
+]);
+
 
 function newCache() {
   return {
@@ -55,7 +59,7 @@ export async function getPack(deck: Deck, slideIndex: number, variant: Variant, 
   };
   // Screen moments are observations, not new topics. Keep PDF slide identity intact.
   const identity = deck.sourceType === 'screen'
-    ? JSON.stringify([deck.id, slide.text.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim()]) : deck.id;
+    ? screenSourceKey(deck, slideIndex) : deck.id;
   const cacheSlide = deck.sourceType === 'screen' ? 0 : slideIndex;
   const baseKey = scriptKey(identity, cacheSlide, variant, depth, profileMemo);
   const sk = mediaProvider.compiled ? JSON.stringify([baseKey, variant.pacing, variant.gameplayType]) : baseKey;

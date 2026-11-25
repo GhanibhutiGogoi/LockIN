@@ -14,7 +14,7 @@ import { notifyComeBack, playCue, primeCue, whenVisible, whenStudyActive } from 
 import { getStream, releaseCamera, requestCamera, type CameraStatus } from '../lib/camera';
 import { plainText } from '../lib/demoDeck';
 import { devlog } from '../lib/devlog';
-import { beginScreenAnalysis, finishScreenAnalysis, getLiveScreenScene, getScreenDiagnostics, getScreenTimeline, getStudyScreenContext, hasStudyRecapContext, setScreenReading } from '../lib/screenShare';
+import { beginScreenAnalysis, finishScreenAnalysis, getLiveScreenScene, resolveScreenScene, getScreenDiagnostics, getScreenTimeline, getStudyScreenContext, hasStudyRecapContext, setScreenReading } from '../lib/screenShare';
 import { historicalFocus } from '../screenStudy/timeline';
 import { ScreenIntervention, type ScreenRisk } from '../screenStudy/intervention';
 import { uid } from '../lib/storage';
@@ -26,7 +26,7 @@ import { LocalAdaptiveProvider } from '../providers/local';
 import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI, type RecoveryWait } from '../store';
 import { DEFAULT_CONFIG, configForSensitivity, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
 import { focusShare, scoreSession } from './metrics';
-import { clearPacks, DEFAULT_VARIANT, getPack } from './packs';
+import { clearPacks, DEFAULT_VARIANT, getPack, screenSourceKey } from './packs';
 
 const TICK_MS = 100;
 const SMOOTH_WINDOW_MS = 1000;
@@ -214,6 +214,7 @@ async function startSession() {
     actions.toast('Personal AI service is unreachable, using your own settings.', 'error');
   }
   // the user's own choice always wins over the model
+  cfg.cooldownSec = s.settings.cooldownSec ?? DEFAULT_CONFIG.cooldownSec;
   cfg.nudgeOnly = !!s.settings.nudgeOnly || !registry.canRecap();
   cfg.driftToLapseSec = lookingAwaySeconds(s.settings.lookingAwaySec);
   registry.attention.setLookingAwayDuration?.(cfg.driftToLapseSec);
@@ -313,6 +314,42 @@ registry.subscribe?.(() => {
   cameraOff('off');
   void stopAttention();
 });
+
+// Settings remain live during a session, including a paused session or a
+// pending render. Sensitivity alone deliberately applies to the next session.
+useApp.subscribe((state, previous) => {
+  if (!rt || state.settings === previous.settings) return;
+  if (state.settings.slangLevel !== previous.settings.slangLevel || state.settings.roastsEnabled !== previous.settings.roastsEnabled) {
+    cancelScreenPreparation();
+  }
+  syncRuntimeSettings();
+});
+
+function syncRuntimeSettings() {
+  if (!rt) return;
+  const { settings } = useApp.getState();
+  const now = Date.now();
+  const cooldown = settings.cooldownSec ?? DEFAULT_CONFIG.cooldownSec;
+  if (cooldown !== rt.cfg.cooldownSec && rt.machine.cooldownUntil > now) {
+    // Preserve the original recovery time instead of restarting the rest.
+    rt.machine.cooldownUntil = Math.max(now, rt.machine.cooldownUntil + (cooldown - rt.cfg.cooldownSec) * 1000);
+    useApp.setState({ live: { ...useApp.getState().live, cooldownUntil: rt.machine.cooldownUntil } });
+  }
+  rt.cfg.cooldownSec = cooldown;
+  rt.cfg.driftToLapseSec = lookingAwaySeconds(settings.lookingAwaySec);
+  rt.cfg.nudgeOnly = !!settings.nudgeOnly || !registry.canRecap();
+  if (!rt.cfg.nudgeOnly) return;
+  cancelScreenPreparation();
+  const rescue = useApp.getState().rescue;
+  if (rescue && rescue.trigger !== 'manual') {
+    useApp.setState({ rescue: { ...rescue, skipped: true, clipEndedAt: now,
+      // An unplayed pack must not become a completed recap in the report.
+      pack: rescue.phase === 'loading' ? undefined : rescue.pack } });
+    finishRescue();
+  } else if (!rescue && rt.machine.state === 'lapse' && rt.machine.lastTrigger !== 'manual') {
+    act({ type: 'rescueFinished', clipMs: 0 });
+  }
+}
 
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => {
@@ -457,6 +494,7 @@ const windowActive = () => document.visibilityState === 'visible' && document.ha
 
 function tick() {
   if (!rt || ending) return;
+  syncRuntimeSettings();
   const now = Date.now();
   const s = useApp.getState();
   const noteTaking = s.live.noteTakingUntil !== null && now < s.live.noteTakingUntil;
@@ -590,6 +628,12 @@ function fallbackVariant(): Variant {
   return { ...DEFAULT_VARIANT, slangLevel: st.slangLevel, id: `fallback·${st.slangLevel}` };
 }
 
+function withClipPreferences(variant: Variant): Variant {
+  const settings = useApp.getState().settings;
+  return { ...variant, slangLevel: settings.slangLevel,
+    humourStyle: !settings.roastsEnabled && variant.humourStyle === 'roasts' ? 'memes' : variant.humourStyle };
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: () => T): Promise<T> {
   return Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback()), ms))]).catch(() => fallback());
 }
@@ -614,11 +658,18 @@ function updateScreenIntervention(now: number, noteTaking: boolean): { score: nu
   const active = !['paused', 'break', 'idle'].includes(rt.machine.state) && !noteTaking && state.screenReading !== 'stopped';
   const available = active && fresh && gaze.value.state !== 'unknown';
   const away = available && ['candidate', 'away'].includes(gaze.value.state);
-  const unrelated = available && gaze.value.state === 'screen' && scene?.status === 'ready' && scene.label === 'off-topic';
+  const evidence = scene ? resolveScreenScene(scene, now) : undefined;
+  const unrelated = available && gaze.value.state === 'screen' && evidence?.status === 'ready' && evidence.label === 'off-topic';
   const recovered = available && gaze.value.state === 'screen' && hasStudyRecapContext(now);
   const risk = away ? 'gaze' : available && gaze.value.state === 'screen' && scene
     ? { scene, goalRequired: !!state.screenGoal } : recovered ? null : 'unknown';
-  const gate = rt.screenGate.update(risk, now, lookingAwaySeconds(state.settings.lookingAwaySec) * 1000);
+  const gate = rt.screenGate.update(risk, now, lookingAwaySeconds(state.settings.lookingAwaySec) * 1000, resolveScreenScene);
+  const latestStudy = getStudyScreenContext();
+  if (rt.preparation && latestStudy && screenSourceKey(rt.preparation.deck, rt.preparation.slideIndex)
+    !== screenSourceKey(latestStudy.deck, latestStudy.slideIndex)) {
+    getScreenTimeline()?.event('preparation-source-changed', `${rt.preparation.slideIndex} -> ${latestStudy.slideIndex}`, now);
+    cancelScreenPreparation();
+  }
   if (rt.preparation && (gate.recovered || !active)) cancelScreenPreparation();
   if (gate.recovered && !rt.preparation && state.live.recapPreparation) {
     useApp.setState({ live: { ...useApp.getState().live, recapPreparation: undefined } });
@@ -673,8 +724,7 @@ function prepareScreenRescue(trigger: ScreenRisk, now: number) {
       } else choice = await withTimeout<VariantChoice>(owner.adaptive.chooseVariant(context), 1500,
         () => ({ variant: fallbackVariant(), isHoldout: false }));
       if (rt !== owner || owner.preparation !== preparation || ending) return;
-      let variant = choice.variant;
-      if (!s.settings.roastsEnabled && variant.humourStyle === 'roasts') variant = { ...variant, humourStyle: 'memes' };
+      let variant = withClipPreferences(choice.variant);
       // Every screen recap includes a question before returning to study.
       variant = { ...variant, quizCount: Math.max(1, variant.quizCount) as 1 | 2 };
       preparation.choice = { ...choice, variant };
@@ -821,8 +871,7 @@ async function startRescue(trigger: LapseTrigger, depth: 1 | 2, rescueInRow: num
   }
   // the user may have left (Esc) or the session ended while the choice was pending
   if (rt !== owner || useApp.getState().rescue?.id !== id) return;
-  let variant = choice.variant;
-  if (!s.settings.roastsEnabled && variant.humourStyle === 'roasts') variant = { ...variant, humourStyle: 'memes' };
+  const variant = withClipPreferences(choice.variant);
   if (memoryDecision) useApp.setState({ rescue: { ...useApp.getState().rescue!, memoryDecision, memoryTopic } });
   rt.recentVariants.push(variant.id);
 

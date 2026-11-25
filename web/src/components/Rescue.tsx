@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CaptionWord, Deck, GameplayLoop, RescuePack } from '../contracts/types';
 import { narrate, type Narration } from '../lib/narrator';
 import { DEMO_MODE } from '../lib/features';
+import { pickGameplay } from '../lib/gameplay';
 import { registry } from '../providers/registry';
 import { answerQuiz, clipEnded, finishRescue, playbackBlocked, playbackFailed, playbackStarted, skipClip, toggleWrongFact } from '../session/engine';
 import { useApp, useDeck, type RescueUI } from '../store';
@@ -19,6 +20,7 @@ export function Rescue() {
   const deck = useDeck();
   const screenStudy = deck.sourceType === 'screen';
   const [loops, setLoops] = useState<GameplayLoop[]>([]);
+  const previousLoop = useRef<string>();
   const [muted, setMuted] = useState(false);
 
   useEffect(() => {
@@ -40,8 +42,6 @@ export function Rescue() {
 
   if (!rescue) return null;
   const slide = deck.slides[rescue.context.slideIndex] ?? deck.slides[0];
-  const variant = rescue.choice?.variant;
-  const loop = loops.find((l) => l.type === variant?.gameplayType) ?? loops[0];
   const reason = rescue.trigger === 'manual' ? 'Recap requested'
     : rescue.trigger === 'content' ? 'Unrelated content for 30 seconds'
     : rescue.trigger === 'window' ? 'Left the study window'
@@ -64,7 +64,7 @@ export function Rescue() {
           {rescue.phase === 'loading' && <Loading deck={deck} rescue={rescue} />}
           {rescue.phase === 'error' && <ErrorCard rescue={rescue} />}
           {(rescue.phase === 'playing' || rescue.phase === 'quiz') && rescue.pack && (
-            <Player deck={deck} rescue={rescue} pack={rescue.pack} loop={loop} muted={muted} quiz={rescue.phase === 'quiz'} />
+            <Player key={rescue.id} deck={deck} rescue={rescue} pack={rescue.pack} loops={loops} previousLoop={previousLoop} muted={muted} quiz={rescue.phase === 'quiz'} />
           )}
 
           {(rescue.phase === 'loading' || rescue.phase === 'playing') && (
@@ -163,7 +163,11 @@ const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, '');
 /** How long b-roll stays up when the media service gives no `duration`. */
 const BROLL_DEFAULT_SEC = 2.6;
 
-function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue: RescueUI; pack: RescuePack; loop?: GameplayLoop; muted: boolean; quiz: boolean }) {
+function Player({ deck, rescue, pack, loops, previousLoop, muted, quiz }: { deck: Deck; rescue: RescueUI; pack: RescuePack; loops: GameplayLoop[]; previousLoop: { current: string | undefined }; muted: boolean; quiz: boolean }) {
+  // Freeze the choice across clock updates, mute changes and the quiz. A new
+  // rescue mounts a new player even when it reuses exactly the same cached pack.
+  const [loop] = useState(() => pickGameplay(loops, pack.variant.gameplayType, previousLoop.current) ?? pack.media.live?.gameplay);
+  useEffect(() => { if (loop && !pack.media.videoUrl) previousLoop.current = loop.id; }, [loop, previousLoop, pack.media.videoUrl]);
   const { captions, durationSec } = pack.media;
   const text = `${pack.script.hook} ${pack.script.script}`;
   const chunks = useMemo(() => chunkCaptions(captions), [captions]);
@@ -240,7 +244,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
   const emphasis = timed?.term ?? term;
   const slide = deck.slides[pack.slideIndex];
   const hasBackground = !!loop?.url || DEMO_MODE;
-  const live = pack.media.live;
+  const live = pack.media.live && { ...pack.media.live, gameplay: loop ?? pack.media.live.gameplay };
 
   return (
     <div className="absolute inset-0" data-recap-playing={!quiz || undefined}>
@@ -248,7 +252,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
         <video ref={video} src={pack.media.videoUrl} playsInline muted={muted} className="h-full w-full object-contain" aria-label="Gameplay recap" />
       ) : <>
       {live && <>
-        <video ref={liveGame} src={live.gameplay.url} preload="auto" muted playsInline loop
+        <video ref={liveGame} src={live.gameplay.url} data-gameplay-id={live.gameplay.id} preload="auto" muted playsInline loop
           className="absolute inset-0 h-full w-full object-cover" aria-label="Live gameplay recap" />
         <audio ref={liveMusic} src={live.music.url} preload="auto" loop />
         <div className="absolute bottom-24 left-3 right-3 z-10 text-[11px] text-white/80">
@@ -328,6 +332,7 @@ function Player({ deck, rescue, pack, loop, muted, quiz }: { deck: Deck; rescue:
 // ───────── quiz ─────────
 
 function Quiz({ pack, rescue }: { pack: RescuePack; rescue: RescueUI }) {
+  const roastsEnabled = useApp(s => s.settings.roastsEnabled);
   const questions = pack.script.quiz.slice(0, Math.max(1, pack.variant.quizCount));
   const qi = Math.min(rescue.answers.length, questions.length - 1);
   const q = questions[qi];
@@ -417,8 +422,8 @@ function Quiz({ pack, rescue }: { pack: RescuePack; rescue: RescueUI }) {
         <div className="mt-5 min-h-[88px]" aria-live="polite">
           {answer && (
             <div className="rise">
-              <p className="rot-caption text-[clamp(34px,6vh,48px)]">{answer.correct ? <span className="now">W</span> : 'Nah'}</p>
-              <p className="mt-2 text-[15px] leading-snug text-white/90">{answer.correct ? q.ifRight : q.ifWrong}</p>
+              <p className="rot-caption text-[clamp(34px,6vh,48px)]">{answer.correct ? <span className="now">W</span> : roastsEnabled ? 'Nah' : 'Not quite'}</p>
+              <p className="mt-2 text-[15px] leading-snug text-white/90">{answer.correct ? q.ifRight : roastsEnabled ? q.ifWrong : `The correct answer is: ${q.options[q.answerIndex]}.`}</p>
             </div>
           )}
         </div>

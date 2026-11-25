@@ -100,11 +100,12 @@ export function SettingsSheet() {
                 ))}
               </div>
               <p className="mt-3 text-[15px] text-graphite">{SLANG_SAMPLE[settings.slangLevel]}</p>
+              <p className="mt-1 text-sm text-graphite">Applies to the next recap prepared, including in this session.</p>
             </Field>
             <Toggle
               id="roasts"
               label="Roast wrong answers"
-              hint="Allow playful feedback about incorrect answers."
+              hint="Allow playful feedback about incorrect answers. Turn off for neutral corrections, including in the current quiz."
               checked={settings.roastsEnabled}
               onChange={(v) => actions.setSettings({ roastsEnabled: v })}
             />
@@ -133,7 +134,7 @@ export function SettingsSheet() {
             <Toggle
               id="nudge-only"
               label="Glow only, no clips"
-              hint="When focus slips you’ll only see the soft edge glow. Useful in a library or a lecture hall."
+              hint="Stops automatic clips immediately, including pending clips. The edge glow appears in the LockIn window. You can still request a recap yourself."
               checked={!!settings.nudgeOnly}
               onChange={(v) => actions.setSettings({ nudgeOnly: v })}
             />
@@ -145,7 +146,7 @@ export function SettingsSheet() {
                   </button>
                 ))}
               </div>
-
+              <p className="mt-2 text-[15px] text-graphite">Starts when LockIn confirms you are back studying. Changes apply immediately to any remaining rest. The next clip is prepared after this rest ends.</p>
             </Field>
           </Group>
 
@@ -166,7 +167,7 @@ export function SettingsSheet() {
               <button
                 type="button"
                 className="btn btn-quiet justify-start"
-                disabled={!hasDeck || !registry.attention.calibratePoint}
+                disabled={!hasDeck || !(registry.attention.calibrate || registry.attention.calibratePoint)}
                 onClick={async () => {
                   // mid-session: pause (tracking off, session kept); the study screen resumes it afterwards
                   if (isRunning()) await pauseSession();

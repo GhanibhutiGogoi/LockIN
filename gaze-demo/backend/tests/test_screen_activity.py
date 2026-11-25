@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from lockin.app import create_app
 from lockin.memory import Memory
-from lockin.screen_activity import ActivityInput, ActivityModel, content_blocks, document_text, model_blocks
+from lockin.screen_activity import ActivityInput, ActivityModel, content_blocks, document_text, model_blocks, prompt_cost
 
 
 GOAL = 'Review HCI usability testing'
@@ -46,6 +46,36 @@ def test_long_ocr_prompts_keep_original_ids_with_bounded_input():
     assert sum(len(block['text']) + 12 for block in selected) <= 1100
     assert selected[0] == {'id': 0, 'text': blocks[0]}
     assert all(block['text'] == blocks[block['id']] for block in selected)
+
+
+def test_chinese_video_pages_have_a_token_budget_not_an_english_character_budget():
+    blocks = ['纪录片推荐', '热门视频'] + [f'{i}：探访世界各地的美食与旅行故事，记录普通人的生活。' for i in range(40)]
+    selected = model_blocks(blocks)
+    assert sum(prompt_cost(b['text']) + 12 for b in selected) <= 320
+    assert 2 <= len(selected) < 10
+    assert all(b['text'] == blocks[b['id']] for b in selected)
+    assert content_blocks('番剧直播游戏中心会员购漫画赛事下载客户端\n2万点赞某个用户\n这是一档探索世界各地美食与文化的旅行纪录片') == ['这是一档探索世界各地美食与文化的旅行纪录片']
+    long = '这是一段讲解异常值检测和数据挖掘课程概念的正文。' * 8
+    assert long.startswith(model_blocks([long])[0]['text'])
+    assert prompt_cost(model_blocks([long])[0]['text']) <= 160
+
+
+def test_timeout_is_reported_separately_from_other_model_failures():
+    def timeout(request):
+        raise httpx.ReadTimeout('inference deadline', request=request)
+    result = ActivityModel('http://127.0.0.1:8005/v1/chat/completions', httpx.MockTransport(timeout)).analyze(GOAL, TEXT)
+    assert result['reason'] == 'model-timeout'
+
+
+def test_descriptive_chinese_video_titles_do_not_require_a_long_prose_paragraph():
+    def send(request):
+        blocks = json.loads(json.loads(request.content)['messages'][1]['content'])['blocks']
+        return httpx.Response(200, json={'model': 'lockin-screen-activity', 'choices': [
+            {'finish_reason': 'stop', 'message': {'content': json.dumps({'label': 'off-topic', 'block_ids': [blocks[0]['id']]})}}
+        ]})
+    result = ActivityModel('http://127.0.0.1:8005/v1/chat/completions', httpx.MockTransport(send)).analyze(
+        'outlier in data mining', '谁能锻造最强武器？\n冥王星的前世今生\n理想主义帝王的幻灭')
+    assert result['label'] == 'off-topic'
 
 
 def test_route_handles_empty_text_and_unavailable_model(tmp_path, monkeypatch):
@@ -153,3 +183,18 @@ def test_layout_preserves_chinese_inbox_guard(tmp_path, monkeypatch):
     payload = layout([box('https://mail.example.edu', 30), box('收件箱', 180),
                       box('This unopened message advertises a shopping promotion.', 240)])
     assert client.post('/v1/web-screen/activity', json=payload).json() == {'label': 'uncertain'}
+
+
+def test_open_email_uses_reading_pane_instead_of_controls_or_other_messages():
+    blocks = [box('https://outlook.office365.com/mail', 40),
+              box('Delete Archive', 220), box('Unread', 260),
+              box('Outlier Detection course project', 440, 120),
+              box('PG Online Admissions System', 490, 120),
+              box('University Forum: HydroGym flow-control priors', 330, 650),
+              box('Summarize this email', 380, 650),
+              box('In this talk I present reinforcement learning for fluid flow control.', 430, 650)]
+    text, filtering = document_text(ActivityInput.model_validate(layout(blocks)))
+    assert text.splitlines() == [blocks[5]['text'], blocks[7]['text']]
+    assert filtering['readingPane'] is True
+    assert filtering['excludedBlocks'] == 6
+    assert content_blocks('Delete Archive\nUnread\nReport\n' + text) == text.splitlines()

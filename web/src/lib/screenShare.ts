@@ -5,6 +5,9 @@ import type { Deck, ScreenDiagnostic } from '../contracts/types';
 import { ScreenTimeline, SCENE_GAP_MS } from '../screenStudy/timeline';
 import { ScreenProcessor } from '../screenStudy/processor';
 import { sceneChanged } from '../screenStudy/sceneChange';
+import { sameReadingDocument } from '../screenStudy/continuity';
+import { ReadingNavigation } from '../screenStudy/navigation';
+import { recordClassification } from '../screenStudy/classificationHistory';
 import type { ScreenScene } from '../screenStudy/types';
 
 const SAMPLE_MS = 750;
@@ -18,6 +21,8 @@ interface Capture {
   canvas: HTMLCanvasElement;
   probe: HTMLCanvasElement;
   signature?: Uint8ClampedArray;
+  navigationSignature?: Uint8ClampedArray;
+  navigation: ReadingNavigation;
   frame?: Promise<Blob | null>;
   timer?: number;
 }
@@ -41,15 +46,17 @@ export const getScreenDiagnostics = () => ({ samples: [...diagnostics], droppedS
 export const getScreenTimeline = () => timeline;
 export const getStudyScreenContext = () => studyContext;
 export const getLiveScreenScene = (now = Date.now()) => reading ? timeline?.live(now) : undefined;
+export const resolveScreenScene = (scene: ScreenScene, timestamp: number) => timeline?.resolve(scene, timestamp) ?? scene;
 
 export function beginScreenAnalysis(startedAt: number) {
   processor?.cancel();
+  useApp.setState({ screenClassifications: [] });
   timeline = new ScreenTimeline(startedAt, useApp.getState().screenGoal);
   const owner = timeline;
   processor = new ScreenProcessor(owner, scene => { if (timeline === owner) publish(scene); });
   studyContext = undefined;
   contextTimestamp = 0;
-  if (capture) capture.signature = undefined;
+  if (capture) { capture.signature = undefined; capture.navigation.clear(); }
 }
 
 /** Stop acquisition immediately, then let bounded historical work finish. */
@@ -87,7 +94,7 @@ export async function shareStudyScreen(reuseSession = false, goal = '') {
     video.muted = true;
     video.playsInline = true;
     video.srcObject = stream;
-    const lease: Capture = { deckId, track, video, events: new AbortController(),
+    const lease: Capture = { deckId, track, video, events: new AbortController(), navigation: new ReadingNavigation(),
       canvas: document.createElement('canvas'), probe: document.createElement('canvas') };
     lease.probe.width = 256;
     lease.probe.height = 144;
@@ -95,7 +102,7 @@ export async function shareStudyScreen(reuseSession = false, goal = '') {
     if (!reuseSession) {
       processor?.cancel(); processor = undefined; timeline = undefined; studyContext = undefined;
       diagnostics = []; droppedSamples = 0;
-      useApp.setState({ screenOcr: null, screenGoal: goal.trim().slice(0, 300), screenActivity: null });
+      useApp.setState({ screenOcr: null, screenGoal: goal.trim().slice(0, 300), screenActivity: null, screenClassifications: [] });
       actions.addDeck({ id: deckId, sourceType: 'screen', title: 'Shared screen', slides: [], slideCount: 0 });
       actions.go('study');
     }
@@ -106,7 +113,7 @@ export async function shareStudyScreen(reuseSession = false, goal = '') {
     if (settings.displaySurface && settings.displaySurface !== 'monitor') actions.toast('Share the entire calibrated display to follow study across WPS and browser tabs.');
     track.addEventListener('ended', stopScreenShare, { signal: lease.events.signal, once: true });
     track.addEventListener('mute', () => {
-      timeline?.breakScene(); lease.signature = undefined;
+      timeline?.breakScene(); lease.signature = undefined; lease.navigation.clear();
       useApp.setState({ screenReading: 'reading', screenSeenAt: null, screenActivity: null });
     }, { signal: lease.events.signal });
     useApp.setState({ screenReading: reading ? 'reading' : 'waiting', screenSeenAt: null });
@@ -135,7 +142,7 @@ export function setScreenReading(enabled: boolean) {
   if (!capture) return;
   recordScreen({ status: enabled ? 'reading' : 'paused' });
   if (capture.timer !== undefined) clearTimeout(capture.timer);
-  timeline?.breakScene(); capture.signature = undefined;
+  timeline?.breakScene(); capture.signature = undefined; capture.navigation.clear();
   capture.track.enabled = enabled;
   if (!enabled) capture.video.pause();
   useApp.setState({ screenReading: enabled ? 'reading' : 'paused', screenSeenAt: null, screenActivity: null });
@@ -145,7 +152,8 @@ export function setScreenReading(enabled: boolean) {
 export function hasRecentScreenText(now = Date.now()) { return getLiveScreenScene(now)?.status === 'ready'; }
 
 export function hasStudyRecapContext(now: number) {
-  const scene = getLiveScreenScene(now);
+  const raw = getLiveScreenScene(now);
+  const scene = raw ? resolveScreenScene(raw, now) : undefined;
   return scene?.status === 'ready' && (!timeline?.goal || scene.label === 'related');
 }
 
@@ -164,8 +172,11 @@ function publish(scene: ScreenScene) {
     lineCount: scene.blocks?.length ?? scene.text?.split('\n').length ?? 0,
     width: scene.width, height: scene.height, message: scene.message ?? scene.label ?? undefined });
   const lease = capture;
+  if (lease && timeline && scene.blocks) lease.navigation.learn(scene, timeline);
   // Preserve historical text even when inference finishes after the learner switched pages.
   const state = useApp.getState();
+  const history = recordClassification(state.screenClassifications, scene);
+  if (history !== state.screenClassifications) useApp.setState({ screenClassifications: history });
   const deck = state.decks.find(d => d.id === state.deckId && d.sourceType === 'screen');
   if (scene.status === 'ready' && scene.slideIndex === undefined && deck) {
     scene.slideIndex = deck.slides.length;
@@ -195,7 +206,7 @@ async function sample(lease: Capture) {
   try {
     if (lease.track.readyState !== 'live') { stopScreenShare(); return; }
     if (showsLockIn(lease) || useApp.getState().rescue || useApp.getState().breakCard || lease.track.muted) {
-      owner.breakScene(); lease.signature = undefined;
+      owner.breakScene(); lease.signature = undefined; lease.navigation.clear();
       useApp.setState({ screenReading: 'on-lockin', screenSeenAt: null, screenActivity: null });
       return;
     }
@@ -209,12 +220,33 @@ async function sample(lease: Capture) {
     const now = Date.now(), previous = owner.current;
     const retry = (previous?.status === 'error' || previous?.label === 'unavailable')
       && now - (previous.classifiedAt ?? previous.completedAt ?? now) >= 5000;
-    const changed = sceneChanged(lease.signature, signature) || retry || (!!previous && now - previous.timestamp >= REFRESH_MS);
+    const anchored = lease.navigation.matches(signature);
+    const sameDocument = !!previous && (anchored ?? sameReadingDocument(lease.navigationSignature, signature));
+    // Navigation changes matter even when the body happens to look identical.
+    const navigationChanged = !!previous && (anchored === false
+      || (anchored === undefined && sameReadingDocument(lease.navigationSignature, lease.navigationSignature ?? signature) && !sameDocument));
+    const changed = sceneChanged(lease.signature, signature) || navigationChanged
+      || (!!previous && now - previous.timestamp >= REFRESH_MS);
     const scale = Math.min(1, 1600 / Math.max(width, height));
-    const scene = owner.observe(now, changed, Math.round(width * scale), Math.round(height * scale), lease.track.getSettings().displaySurface ?? 'unknown');
-    if (scene === previous) {
-      if (scene.status === 'ready') useApp.setState({ screenSeenAt: scene.observedUntil, screenReading: 'ready', screenActivity: scene.label });
+    const scene = owner.observe(now, changed, Math.round(width * scale), Math.round(height * scale), lease.track.getSettings().displaySurface ?? 'unknown', sameDocument);
+    lease.navigation.record(scene, signature);
+    if (!previous || scene.documentId !== previous.documentId) lease.navigationSignature = signature;
+    if (scene === previous && !retry) {
+      const evidence = owner.resolve(scene, now);
+      if (evidence.status === 'ready') useApp.setState({ screenSeenAt: scene.observedUntil, screenReading: 'ready', screenActivity: evidence.label });
       return;
+    }
+    // A service retry is not a page change. Retain the scene so a successful
+    // result can resolve actual gaze observations made while it was unavailable.
+    if (scene === previous) {
+      if (scene.status === 'ready') {
+        // The image is unchanged and OCR succeeded: retry only the failed model.
+        processor.retryClassification(scene);
+        useApp.setState({ screenActivity: scene.label });
+        return;
+      }
+      scene.status = 'pending'; scene.label = owner.goal ? 'checking' : null;
+      scene.message = undefined; scene.classifiedAt = undefined; scene.completedAt = undefined;
     }
     // Compare against the scene's original frame so gradual scrolling still accumulates.
     if (changed) lease.signature = signature;

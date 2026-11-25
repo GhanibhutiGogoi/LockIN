@@ -91,13 +91,23 @@ try {
   const notifications = page.getByRole('checkbox', { name: /Call me back/ });
   if (await notifications.count()) await notifications.uncheck();
   await page.getByRole('button', { name: 'I agree, start studying' }).click();
-  const detected = page.locator('[data-screen-text]');
-  await detected.filter({ hasText: 'Cellular respiration' }).waitFor({ timeout: 15_000 });
-  assert.match(await detected.innerText(), /glucose into ATP/i);
+  // OCR content remains in session state; the UI now shows classification history.
+  await page.evaluate(async () => { window.ocrTestStore = (await import('/src/store.ts')).useApp; });
+  const detectedText = () => page.evaluate(() => {
+    const s = window.ocrTestStore.getState();
+    return s.decks.find(d => d.id === s.deckId)?.slides[s.slideIndex]?.text ?? '';
+  });
+  const waitForText = (text, timeout) => page.waitForFunction(expected => {
+    const s = window.ocrTestStore.getState();
+    const text = s.decks.find(d => d.id === s.deckId)?.slides[s.slideIndex]?.text ?? '';
+    return ['ready', 'on-lockin'].includes(s.screenReading) && text.includes(expected);
+  }, text, { timeout });
+  await waitForText('Cellular respiration', 15_000);
+  assert.match(await detectedText(), /glucose into ATP/i);
   if (artifacts) await page.screenshot({ path: join(artifacts, 'reading-english.png') });
 
   await page.evaluate(() => window.screenReplay.draw(['线性代数', '矩阵乘法与向量空间']));
-  await detected.filter({ hasText: '矩阵乘法' }).waitFor({ timeout: 15_000 });
+  await waitForText('矩阵乘法', 15_000);
   if (artifacts) await page.screenshot({ path: join(artifacts, 'reading-chinese.png') });
 
   assert.equal(await page.getByRole('dialog', { name: 'Focus rescue' }).count(), 0);
@@ -110,7 +120,7 @@ try {
 
   await page.evaluate(() => window.screenReplay.draw([]));
   await page.getByText('No readable text on the shared screen.').waitFor({ timeout: 15_000 });
-  assert.equal(await detected.count(), 0);
+  assert.equal(await page.locator('[data-screen-text]').count(), 0);
   await page.keyboard.press('p');
   await page.getByRole('button', { name: 'Resume P', exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.screenReplay.enabled()), false);
@@ -121,7 +131,7 @@ try {
 
   await page.evaluate(() => window.screenReplay.draw(['Photosynthesis', 'Chlorophyll absorbs light to power photosynthesis.']));
   await page.getByRole('button', { name: 'Resume P', exact: true }).click();
-  await detected.filter({ hasText: 'Chlorophyll' }).waitFor({ timeout: 15_000 });
+  await waitForText('Chlorophyll', 15_000);
 
   const retrieval = page.waitForResponse((response) => {
     if (!new URL(response.url()).pathname.endsWith('/web-memory/retrieve')) return false;
@@ -142,13 +152,13 @@ try {
 
   await page.evaluate(() => window.screenReplay.end());
   await page.getByText('Screen sharing stopped', { exact: true }).waitFor();
-  assert.equal(await detected.count(), 0);
+  assert.equal(await page.locator('[data-screen-text]').count(), 0);
   await page.getByRole('button', { name: 'Share a screen' }).click();
-  await detected.filter({ hasText: 'Chlorophyll' }).waitFor({ timeout: 15_000 });
+  await waitForText('Chlorophyll', 15_000);
   await page.getByRole('button', { name: 'Stop sharing' }).click();
   assert.equal(await page.evaluate(() => window.screenReplay.trackState()), 'ended');
   await page.getByRole('button', { name: 'Share a screen' }).click();
-  await detected.filter({ hasText: 'Chlorophyll' }).waitFor({ timeout: 15_000 });
+  await waitForText('Chlorophyll', 15_000);
   await page.getByRole('button', { name: 'Finish', exact: true }).click();
   await page.getByRole('button', { name: 'See my report' }).click();
   await page.getByRole('heading', { name: 'Screen moments recapped' }).waitFor();
