@@ -4,9 +4,17 @@ import { ScreenIntervention } from './intervention';
 it('prepares before playback and only after continuous current evidence', () => {
   const gate = new ScreenIntervention();
   let result = gate.update('content', 0);
-  for (let ms = 100; ms <= 3000; ms += 100) result = gate.update('content', ms);
+  for (let ms = 100; ms < 1000; ms += 100) {
+    result = gate.update('content', ms);
+    expect(result.prepare).toBe(false);
+  }
+  result = gate.update('content', 1000);
   expect(result).toMatchObject({ prepare: true, play: false });
-  for (let ms = 3100; ms <= 30_000; ms += 100) result = gate.update('content', ms);
+  for (let ms = 1100; ms < 30_000; ms += 100) {
+    result = gate.update('content', ms);
+    expect(result.play).toBe(false);
+  }
+  result = gate.update('content', 30_000);
   expect(result.play).toBe(true);
   expect(gate.update(null, 30_100)).toMatchObject({ prepare: false, play: false });
   for (let ms = 30_200; ms <= 31_100; ms += 100) gate.update(null, ms);

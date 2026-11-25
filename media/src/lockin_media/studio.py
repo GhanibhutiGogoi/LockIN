@@ -51,6 +51,7 @@ class RenderRequest(MediaRequest, VoiceConnection):
 
 
 class Recording(BaseModel):
+    duration_sec: float | None = Field(default=None, gt=0, le=180, allow_inf_nan=False)
     timings_ms: dict[str, float] = Field(default_factory=dict)
     audio_base64: str = Field(min_length=1, max_length=8_000_000)
     captions: list[Caption] = Field(min_length=1, max_length=240)

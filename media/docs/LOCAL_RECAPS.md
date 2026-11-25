@@ -100,8 +100,9 @@ baseline. The historical 123 s script latency was from a different run and shoul
 not be used to attribute a six-fold gain to this change. The lighter model's small
 single-run advantage was insufficient to change the default. Sample outputs kept
 the 1.5 IQR fences and the distinction between potential outliers and errors.
-Full uncached video readiness within 27 seconds has NOT yet been demonstrated.
-The local narration endpoint on port 18114 refused connections during this test.
+That earlier test checked localhost port 18114, which refused connections. This
+was the wrong endpoint for this workstation: the teammate's narration service
+uses a private LAN address. See the fresh end-to-end measurements below.
 
 ### Stage timings
 
@@ -147,7 +148,9 @@ Existing window-focus and manual autoplay-retry behavior remains in place.
 
 Narration is cached independently of slide identity and background choice under
 `media/data/live/<hash>/`; it is keyed by actual spoken text, voice, pacing and
-voice-service URL. Raw audio is validated before atomic publication. This cache is
+voice-service URL. Base64, caption text and timing bounds are validated before
+atomic publication. The live path trusts a valid service-reported duration;
+services omitting it use ffprobe. This cache is
 local and persists until removed; delete its directories while the studio is
 stopped to reclaim storage. Existing saved MP4s and `POST /media` remain supported.
 Live recaps do not automatically appear in the saved-MP4 list and do not perform
@@ -169,8 +172,8 @@ Validation on this workstation:
   synthetic six-second narration verified captions, mute, completion, quiz and
   stopped background layers. Audio startup was **814 ms** in that run; this is
   not end-to-end generation latency.
-- The narration service at `127.0.0.1:18114` still refused connections, so a fresh
-  full LLM → remote TTS → live playback timing could not be measured.
+- This earlier comparison used localhost port 18114 instead of the actual remote
+  voice address. It did not establish that the teammate's service was unavailable.
 
 Reproduce the assembly comparison from `media/` with FFmpeg on PATH and a prior
 `verify_flow.py` output whose saved MP4 still exists:
@@ -179,7 +182,7 @@ Reproduce the assembly comparison from `media/` with FFmpeg on PATH and a prior
 .venv/Scripts/python.exe -X utf8 scripts/benchmark-composition.py --fixture ../.runtime/windows/full-flow.json --output ../.runtime/windows/composition-comparison.json
 ```
 
-Starting preparation after three seconds leaves 27 seconds before the target.
+The initial implementation started preparation after three seconds, leaving 27 seconds before the target.
 At the measured ~20-second script latency, roughly seven seconds remain for voice,
 alignment, transfer and startup (less with personalization). Removing MP4 encoding
 saves a substantial stage, but does not establish a guaranteed 30-second deadline.
@@ -187,3 +190,63 @@ Use `preparation-started`, `preparation-ready`, `playback-requested` and the new
 `playback-confirmed` timeline event alongside `/media/live` timing records. Unknown
 gaze, genuine recovery, window-focus waiting and browser autoplay restrictions
 remain explicit conditions; a placeholder animation is not counted as a ready recap.
+
+## Real narration and deadline validation (2026-11-25)
+
+The teammate-provided LAN narration endpoint passed both `/readyz` and the
+studio's `/connection` check. Local MP4 generation had never implied a local
+narration server. Use **Settings → Local video recaps → Narration API address →
+Connect narration** with the actual service address. The Windows launcher's
+`--check --voice-url http://VOICE_HOST:18114/` also checks that endpoint and saves
+it in ignored `.runtime/windows/narration-url.txt` for subsequent checks/replays;
+this file does not change an existing browser's saved settings.
+
+The current writer remains **gpt-6.2-sol, low reasoning**. Narration now targets
+1.6 words per requested second (adjusted by pacing), prioritizing the explanation
+over extra jokes and repeated definitions. Override with
+`LOCKIN_LLM_WORDS_PER_SECOND` if needed. Actual speech can be shorter than the
+requested target. The prompt cache version was bumped to invalidate old scripts.
+Live preparation reuses the voice API's `duration_sec`, avoiding a redundant
+ffprobe process measured at 2.534 seconds on this machine. Older voice APIs
+without a duration still work through the probe fallback.
+
+Speculative preparation now starts after one second of observed distraction.
+Actual playback still requires 30 seconds of valid evidence, ready media and
+window focus. Recovery still cancels the pending intervention. Earlier
+preparation can spend model/voice work on brief lapses that never need playback.
+
+All rows below used fresh scripts and narration (both cache-hit flags false),
+real OCR/relevance, Codex, remote narration and browser audio playback. Gaze and
+screen content were controlled; the browser was focused and autoplay permitted.
+The clock starts when the test changes gaze to away, after study content has
+been recognized, and ends at `playback-confirmed`, not merely a UI state change.
+
+| Configuration | Script | Live media | Preparation → ready | Away → actual playback |
+| --- | ---: | ---: | ---: | ---: |
+| Live composition baseline, 3 s preparation trigger | 19.628 s | 13.117 s | 32.783 s | 36.305 s |
+| Shorter narration + service duration, 3 s trigger | 17.813 s | 10.111 s | 27.943 s | 31.328 s |
+| Same optimization, 1 s trigger, run 1 | 17.456 s | 8.835 s | 26.305 s | 30.367 s |
+| Same optimization, 1 s trigger, run 2 | 18.207 s | 9.677 s | 27.907 s | 30.393 s |
+
+The final runs were ready at 27.475 and 29.122 seconds after looking away and
+waited for the 30-second evidence gate. Sampling and audio startup account for
+the remaining fraction of a second. These are two successful runs, not a p95
+guarantee: longer material, personalisation, network load, unknown gaze or a
+background window can still delay playback. Quiz completion, return to study
+and report export also passed. The remote service does not return detailed
+TTS/alignment stage timings; `narration_request` includes both and transfer.
+
+A local Qwen writer trial took 27.698 seconds and introduced unsupported detail;
+a lighter Codex model took 16.926 seconds in one direct trial. Neither justified
+changing the writer. Scripts remain the largest measured generation stage.
+
+Replay with all services ready (disable script caching in the studio environment
+with `LOCKIN_LLM_CACHE_SECONDS=0` when measuring uncached performance):
+
+```powershell
+node web/scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --deadline
+```
+
+The actual address comes from `LOCKIN_TEST_VOICE_URL` or the launcher's saved
+address. Inspect `.runtime/windows/deadline-playback-timing.json` alongside
+`media/data/timings.jsonl`; verify both cache-hit flags before claiming a cold run.

@@ -1,4 +1,4 @@
-// Browser orchestration with controlled gaze, real OCR/relevance, and a verified real MP4.
+// Browser orchestration with controlled gaze, real OCR/relevance, and actual media playback.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -6,10 +6,12 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const url = process.argv[2] ?? 'http://127.0.0.1:5181/';
-const realMedia = process.argv.includes('--real-media');
-const voiceUrl = process.env.LOCKIN_TEST_VOICE_URL ?? 'http://127.0.0.1:18114/';
+const deadlineMode = process.argv.includes('--deadline');
+const realMedia = deadlineMode || process.argv.includes('--real-media');
+const voiceFile = new URL('../../.runtime/windows/narration-url.txt', import.meta.url);
+const voiceUrl = process.env.LOCKIN_TEST_VOICE_URL ?? (existsSync(voiceFile) ? readFileSync(voiceFile, 'utf8').trim() : 'http://127.0.0.1:18114/');
 assert.ok(['127.0.0.1', 'localhost'].includes(new URL(url).hostname));
-const verified = JSON.parse(readFileSync(new URL('../../.runtime/windows/full-flow.json', import.meta.url), 'utf8'));
+const verified = realMedia ? null : JSON.parse(readFileSync(new URL('../../.runtime/windows/full-flow.json', import.meta.url), 'utf8'));
 const require = createRequire(import.meta.url);
 const bundled = join(homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
 const { chromium } = require(process.env.LOCKIN_PLAYWRIGHT_MODULE ?? (existsSync(bundled) ? bundled : 'playwright'));
@@ -102,7 +104,8 @@ try {
     await page.locator('#screen-goal').fill('Study data mining and outlier detection');
     await page.getByRole('button', { name: 'Share your screen' }).click();
     const consent = page.getByRole('button', { name: 'I agree, start studying' });
-    if (await consent.isVisible()) await consent.click();
+    const consented = await page.evaluate(async () => { const { useApp } = await import('/src/store.ts'); const { CONSENT_VERSION } = await import('/src/components/ConsentScreen.tsx'); return useApp.getState().consent === CONSENT_VERSION; });
+    if (!consented) await consent.click();
     await page.locator('[data-screen-activity="related"]').waitFor({ timeout: 90_000 });
     console.log('PASS: external study screen read and classified.');
   }
@@ -113,14 +116,14 @@ try {
       phase = await page.evaluate(async () => (await import('/src/store.ts')).useApp.getState().rescue?.phase);
       const failure = await page.evaluate(async () => (await import('/src/lib/screenShare.ts')).getScreenTimeline()?.events.find(e => e.type === 'preparation-error'));
       if (failure) throw new Error(`Preparation failed: ${failure.detail}`);
-      if (phase === 'loading') break;
+      if (phase === 'loading' || (deadlineMode && phase === 'playing')) break;
       await page.waitForTimeout(250);
     }
-    if (phase !== 'loading') {
+    if (phase !== 'loading' && !(deadlineMode && phase === 'playing')) {
       console.log(await page.evaluate(async () => ({ live: (await import('/src/store.ts')).useApp.getState().live,
         events: (await import('/src/lib/screenShare.ts')).getScreenTimeline()?.events })));
     }
-    assert.equal(phase, 'loading');
+    assert.ok(phase === 'loading' || (deadlineMode && phase === 'playing'));
     await page.evaluate(() => window.flow.focus(true));
     const video = page.getByLabel(/^(Live gameplay recap|Gameplay recap)$/);
     await video.waitFor({ timeout: 10_000 });
@@ -133,7 +136,7 @@ try {
     await page.evaluate(() => { window.flow.look('screen'); window.flow.content('study'); window.flow.focus(false); });
     await page.locator('[data-screen-activity="related"]').waitFor({ timeout: 60_000 });
     await page.waitForTimeout(6500);
-    console.log('PASS: actual MP4 playback -> answer -> return to study.');
+    console.log('PASS: actual media playback -> answer -> return to study.');
   }
   async function finish(name) {
     await page.getByRole('button', { name: 'Finish', exact: true }).click();
@@ -165,11 +168,13 @@ try {
 
   await start();
   if (realMedia) {
-    await page.evaluate(() => window.flow.look('away'));
-    await page.waitForTimeout(35_000);
-    await page.evaluate(() => window.flow.look('unknown'));
-    await page.waitForTimeout(600);
-    await page.evaluate(() => window.flow.look('away'));
+    const awayStartedAt = await page.evaluate(deadlineMode => { window.flow.look('away'); if (deadlineMode) window.flow.focus(true); return Date.now(); }, deadlineMode);
+    if (!deadlineMode) {
+      await page.waitForTimeout(35_000);
+      await page.evaluate(() => window.flow.look('unknown'));
+      await page.waitForTimeout(600);
+      await page.evaluate(() => window.flow.look('away'));
+    }
     await completeRescue();
     const events = await page.evaluate(async () => (await import('/src/lib/screenShare.ts')).getScreenTimeline().events);
     const started = events.find(e => e.type === 'preparation-started');
@@ -178,13 +183,16 @@ try {
     assert.ok(started && ready && requested);
     assert.equal(events.filter(e => e.type === 'preparation-started').length, 1);
     assert.ok(!events.some(e => e.type === 'preparation-cancelled'));
-    const timing = { preparationToReadySeconds: (ready.timestamp - started.timestamp) / 1000,
+    const confirmed = events.find(e => e.type === 'playback-confirmed');
+    assert.ok(confirmed, 'Actual audio playback must be confirmed');
+    const timing = { awayStartedAt, awayToPlaybackSeconds: (confirmed.timestamp - awayStartedAt) / 1000,
+      preparationToReadySeconds: (ready.timestamp - started.timestamp) / 1000,
       readyToPlaybackRequestSeconds: (requested.timestamp - ready.timestamp) / 1000, serviceTimings, events };
-    writeFileSync(new URL('../../.runtime/windows/real-playback-timing.json', import.meta.url), JSON.stringify(timing, null, 2));
+    writeFileSync(new URL(deadlineMode ? '../../.runtime/windows/deadline-playback-timing.json' : '../../.runtime/windows/real-playback-timing.json', import.meta.url), JSON.stringify(timing, null, 2));
     console.log('REAL TIMING', JSON.stringify(timing));
     await finish('gaze');
     assert.deepEqual(errors, []);
-    console.log('PASS: live script -> voice -> MP4 generation, brief tracking loss, continued distraction -> playback -> quiz.');
+    console.log(`PASS: live script -> real voice -> browser composition -> ${deadlineMode ? '30-second threshold' : 'brief tracking loss'} -> playback -> quiz.`);
   } else {
   await page.evaluate(() => window.flow.look('away'));
   await page.waitForTimeout(4500);

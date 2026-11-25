@@ -1,5 +1,6 @@
 export type ScreenRisk = 'gaze' | 'content';
-export const PREPARE_AFTER_MS = 3000;
+// Speculative preparation starts early; playback still requires 30 seconds of evidence.
+export const PREPARE_AFTER_MS = 1000;
 export const PLAY_AFTER_MS = 30_000;
 const RECOVERY_MS = 1000;
 const UNKNOWN_GRACE_MS = 5000;

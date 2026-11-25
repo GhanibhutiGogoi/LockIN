@@ -7,6 +7,8 @@ Run from the repository root in PowerShell:
 ```powershell
 .\gaze-demo\.venv\Scripts\python.exe scripts/windows/start.py
 .\gaze-demo\.venv\Scripts\python.exe scripts/windows/start.py --check
+# Check the actual teammate-hosted voice service and remember it for test tools:
+.\gaze-demo\.venv\Scripts\python.exe scripts/windows/start.py --check --voice-url http://VOICE_HOST:18114/
 ```
 
 Open `http://127.0.0.1:5181/`. The launcher starts missing services in the background and retains occupied ports. Logs and process IDs are under `.runtime/windows/`. A listening port is not proof that its service is healthy; use `--check` and inspect the logs. Restart an existing service after changing its Python code. The launcher does not kill unrelated processes.
@@ -34,7 +36,7 @@ This installs pinned, SHA-256 verified Qwen3 4B Q4 weights (about 2.5 GB), llama
 2. Open WPS or another browser tab on the same display. Read a clearly relevant page for 45–60 seconds. Expect extracted text and a related classification. Switching applications alone must not trigger a video. Keep the camera unobstructed; avoid moving to another monitor.
 3. Flip or scroll to a different page. Expect a new screen moment, with a temporary pending/unknown interval. Slow OCR should be assigned to that moment in the eventual report, not to its response time.
 4. Briefly look away for 4–5 seconds, then return. Preparation may start, but a video must not interrupt after recovery. A completed same-topic render can remain cached for a later, independently confirmed lapse.
-5. In a fresh session, read relevant material first, then look away while the tracker still has valid evidence. Preparation starts after about 3 seconds. A playback request requires at least 30 seconds of observed distraction **and** a ready video. Brief unknown intervals pause the dwell and retain the generation task; they never authorize playback. More than five seconds without valid risk evidence resets the dwell, while the render stays reusable. One second of confirmed study recovery cancels the pending intervention. First-time script/narration generation can take several minutes; 30 seconds is a minimum evidence threshold, not a guaranteed delivery time.
+5. In a fresh session, read relevant material first, then look away while the tracker still has valid evidence. Preparation starts after about 1 second. A playback request requires at least 30 seconds of observed distraction **and** ready media. Brief unknown intervals pause the dwell and retain the generation task; they never authorize playback. More than five seconds without valid risk evidence resets the dwell, while the media stays reusable. One second of confirmed study recovery cancels the pending intervention. Two uncached controlled-gaze runs started actual playback at 30.37 and 30.39 seconds; 30 seconds remains a minimum evidence threshold, not a guaranteed delivery time under all conditions.
 6. Allow the notification or listen for the cue, return to LockIn, and watch the video. If autoplay is blocked, click the playback button. Answer the question and return to WPS. A web page cannot reliably force itself above another application; video waits for LockIn to be visible and focused.
 7. In another fresh session, read relevant material first, then keep looking at clearly unrelated content (for example, a shopping cart). Expect an off-topic classification, preparation, and the same sustained-dwell video/quiz flow. Ambiguous or mixed content must remain uncertain. The recap uses the last recognized study-related material, not the unrelated page.
 8. Cover the camera or click **Taking notes** (60 seconds of grace). Missing gaze and note-taking must not create an automatic video. Pause/resume and stop sharing must also stop the associated intervention timers. Use a new session for each trigger test to avoid the existing three-minute recovery cooldown and repeated-rescue limit.
@@ -90,10 +92,20 @@ cd ..
 node web/scripts/replay-screen-flow.mjs
 $env:LOCKIN_TEST_VOICE_URL = 'http://VOICE_HOST:18114/'
 node web/scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --real-media
+node web/scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --deadline
 ```
 
 The API check creates a real short video from synthetic bilingual text. The browser replay uses controlled gaze, real OCR/relevance and that verified MP4 to test both intervention paths, actual playback, quiz completion and report export. It replays the script/media responses to avoid regenerating the same validation video. Artifacts are saved under `.runtime/windows/`; this does not replace validation of a real person's gaze and calibration.
 
 With `--real-media`, the browser also calls the actual script and media services. It injects a short tracking interruption after 35 seconds, verifies that generation is retained, then checks playback, quiz completion and report export. `real-playback-timing.json` records preparation-to-ready and ready-to-playback-request durations. Returning focus to LockIn is measured separately from media readiness.
+
+With `--deadline`, gaze stays continuously away and LockIn has focus throughout
+generation so the test can measure the earliest actual playback. The output
+`deadline-playback-timing.json` includes away-to-`playback-confirmed` latency.
+Both real modes use fresh browser contexts with autoplay allowed and real script,
+voice and media services. They read the narration address from the environment
+above or `.runtime/windows/narration-url.txt`, and do not require a prior MP4
+fixture. This measures the pipeline after relevant study content is recognized;
+it does not validate webcam gaze accuracy or user browser permissions.
 
 The relevance model selects numbered OCR blocks; the server resolves evidence directly from those blocks. Known tracking overlays and application controls are filtered before classification and recap generation. Scene diagnostics retain the raw decision, resolved evidence and validation reason. Screen recap caches use normalized study text rather than observation indices, while retaining voice, style, pacing and connection boundaries.

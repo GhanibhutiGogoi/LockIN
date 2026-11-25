@@ -39,11 +39,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--only', choices=['ocr', 'activity', 'studio', 'web'])
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--voice-url', help='Actual narration API (not necessarily localhost)')
     args = parser.parse_args()
+    if args.voice_url:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        (LOGS / 'narration-url.txt').write_text(args.voice_url.strip(), encoding='utf-8')
+    voice_file = LOGS / 'narration-url.txt'
+    voice_url = args.voice_url or os.environ.get('LOCKIN_TEST_VOICE_URL') or (voice_file.read_text(encoding='utf-8-sig').strip() if voice_file.exists() else '')
     if args.check:
-        for name, url in [('ocr', 'http://127.0.0.1:8000/v1/web-screen/status'),
+        endpoints = [('ocr', 'http://127.0.0.1:8000/v1/web-screen/status'),
                           ('activity', 'http://127.0.0.1:8005/health'),
-                          ('studio', 'http://127.0.0.1:8013/recaps')]:
+                          ('studio', 'http://127.0.0.1:8013/recaps')]
+        if voice_url:
+            endpoints.append(('narration', voice_url.rstrip('/') + '/readyz'))
+        else:
+            print('narration: address not configured; pass --voice-url with the actual service address.')
+        for name, url in endpoints:
             try:
                 with urllib.request.urlopen(url, timeout=5) as response:
                     value = json.load(response)

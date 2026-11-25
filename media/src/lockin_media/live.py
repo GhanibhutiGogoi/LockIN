@@ -59,7 +59,11 @@ def prepare(store, request, record):
                 work = Path(temp)
                 audio = work / "voice.mp3"
                 audio.write_bytes(base64.b64decode(take.audio_base64, validate=True))
-                seconds = timed("voice_probe")(duration)(audio)
+                seconds = take.duration_sec
+                if seconds is None:
+                    seconds = timed("voice_probe")(duration)(audio)
+                else:
+                    annotate(duration_source="narration_service")
                 captions = [c.model_dump() for c in take.captions]
                 if seconds <= 0 or any(c["end"] > seconds + 0.25 for c in captions):
                     raise ValueError("Caption times exceed narration duration")

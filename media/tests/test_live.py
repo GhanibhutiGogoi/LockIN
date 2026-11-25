@@ -105,3 +105,32 @@ def test_mismatched_narration_is_never_published(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="different text"):
         live.prepare(Store(tmp_path), req, lambda: take)
     assert not list((tmp_path / "live").iterdir())
+
+
+def test_voice_service_duration_avoids_a_second_probe(tmp_path, monkeypatch):
+    from lockin_media.storage import Store
+
+    monkeypatch.setattr(live, "select_assets", lambda *_: {})
+
+    def unexpected_probe(_):
+        raise AssertionError("Service already reported the duration")
+
+    monkeypatch.setattr(live, "duration", unexpected_probe)
+    req = studio.RenderRequest.model_validate(
+        {
+            "voice_url": "https://voice.example/",
+            "deck_id": "d",
+            "slide_index": 0,
+            "variant": {},
+            "script": {"script": "Hello!"},
+        }
+    )
+    take = studio.Recording.model_validate(
+        {
+            "audio_base64": "YWJj",
+            "duration_sec": 1,
+            "captions": [{"word": "Hello!", "start": 0, "end": 1}],
+        }
+    )
+    result = live.prepare(Store(tmp_path), req, lambda: take)
+    assert result["duration_sec"] == 1

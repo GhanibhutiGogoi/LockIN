@@ -9,7 +9,7 @@ from .script_writer import Draft, write_script
 from .storage import digest, write_json
 from .timing import annotate, stage
 
-PROMPT_VERSION = 3
+PROMPT_VERSION = 4
 
 
 def cached_script(store, writer, request, catalog):
