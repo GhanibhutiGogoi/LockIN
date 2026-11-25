@@ -12,6 +12,7 @@ import { IntegrationsButton } from './IntegrationsPanel';
 import { Rescue } from './Rescue';
 import { SlideView } from './SlideView';
 import { RecoveryStatus } from './RecoveryStatus';
+import { lookingAwaySeconds } from '../lib/lookingAway';
 
 export function StudyScreen() {
   const deck = useDeck();
@@ -179,6 +180,7 @@ export function StudyScreen() {
 }
 
 function ScreenStudyPanel({ text }: { text?: string }) {
+  const awaySeconds = useApp(s => lookingAwaySeconds(s.settings.lookingAwaySec));
   const live = useApp(s => s.live);
   const cooldown = Math.max(0, Math.ceil((live.cooldownUntil - Date.now()) / 1000));
   const preparation = useApp(s => s.live.recapPreparation);
@@ -217,7 +219,7 @@ function ScreenStudyPanel({ text }: { text?: string }) {
           : 'A recap needs readable study-related text and a connected video service.'}
       </p>}
       {cooldown > 0 && <p className="mt-2 text-sm text-graphite">Rest between clips · {cooldown} seconds remaining.</p>}
-      {preparation && <p className="mt-2 text-sm text-graphite">Confirmed distraction · {Math.floor((live.screenDwellMs ?? 0) / 1000)} / 30 seconds. Missing tracking or an unclassified page can pause this count.</p>}
+      {preparation && <p className="mt-2 text-sm text-graphite">Confirmed distraction · {Math.floor((live.screenDwellMs ?? 0) / 1000)} / {awaySeconds} seconds. Missing tracking or an unclassified page can pause this count.</p>}
       {ocr && <p className="mt-2 text-[14px] text-graphite" data-screen-ocr>{ocr.message}</p>}
       {goal && (
         <dl className="mt-5 grid gap-2 text-[15px]">
@@ -295,6 +297,7 @@ function Elapsed() {
 }
 
 function GazeStatus() {
+  const awaySeconds = useApp(s => lookingAwaySeconds(s.settings.lookingAwaySec));
   const screenStudy = useDeck().sourceType === 'screen';
   const gaze = useApp((s) => s.live.gazeTracking);
   const paused = useApp((s) => s.live.state === 'paused');
@@ -314,7 +317,7 @@ function GazeStatus() {
       <span role="status">{label}</span>
       {showTime && !paused && camera === 'on' && (
         <span className="num" aria-label="Valid non-focus time">
-          {Math.floor(Math.min(gaze.awayMs, gaze.thresholdMs) / 1000)} / {gaze.thresholdMs / 1000} s
+          {Math.floor(Math.min(gaze.awayMs / 1000, awaySeconds))} / {awaySeconds} s
         </span>
       )}
     </div>

@@ -411,6 +411,8 @@ export interface UserSettings {
   roastsEnabled: boolean;
   backgroundStyle: string;
   cooldownSec: number;
+  /** Sustained non-focus duration before a recap is eligible; default 30 seconds. */
+  lookingAwaySec?: number;
   /** Only the soft edge glow, never a full takeover. */
   nudgeOnly?: boolean;
 }

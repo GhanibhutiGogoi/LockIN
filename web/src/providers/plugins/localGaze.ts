@@ -3,6 +3,7 @@ import type { AttentionProvider, AttentionStatus, CalibrationTarget } from '../.
 import type { FocusSample } from '../../contracts/types';
 import { readTraceGeometry, changedGeometry } from '../../gazeTrace/geometry';
 import type { TraceCalibration } from '../../gazeTrace/types';
+import { DEFAULT_LOOKING_AWAY_SEC, lookingAwaySeconds } from '../../lib/lookingAway';
 
 export class LocalGazeProvider implements AttentionProvider {
   readonly name: string;
@@ -18,6 +19,12 @@ export class LocalGazeProvider implements AttentionProvider {
   private skipped = false;
   private reportedIssue: string | null = null;
   private lastOffscreenEvent = 0;
+  private awayThresholdMs = DEFAULT_LOOKING_AWAY_SEC * 1000;
+
+  setLookingAwayDuration(seconds: number) {
+    this.awayThresholdMs = lookingAwaySeconds(seconds) * 1000;
+    this.capture?.setAwayThresholdMs(this.awayThresholdMs);
+  }
   private lifecycle = 0;
   private fallback?: CalibrationTarget['fallback'];
   private samples = new Set<(sample: FocusSample) => void>();
@@ -96,6 +103,7 @@ export class LocalGazeProvider implements AttentionProvider {
       ),
     });
     this.capture = capture;
+    capture.setAwayThresholdMs(this.awayThresholdMs);
 
     const ready = new Promise<void>((resolve, reject) => { this.startup = { resolve, reject }; });
     const timer = setTimeout(() => this.startup?.reject(new Error('Gaze model did not load. Check the local tracker assets.')), 45_000);

@@ -1,10 +1,12 @@
 import type { ScreenScene } from './types';
+import { DEFAULT_LOOKING_AWAY_SEC, MAX_LOOKING_AWAY_SEC } from '../lib/lookingAway';
 export type ScreenRisk = 'gaze' | 'content';
 type Evidence = ScreenRisk | 'unknown' | null;
 type Observation = Evidence | { scene: ScreenScene; goalRequired: boolean };
-// Speculative preparation starts early; playback still requires 30 seconds of evidence.
+// Prepare early; playback requires the user's configured duration of valid evidence.
 export const PREPARE_AFTER_MS = 1000;
-export const PLAY_AFTER_MS = 30_000;
+export const PLAY_AFTER_MS = DEFAULT_LOOKING_AWAY_SEC * 1000;
+const HISTORY_MS = (MAX_LOOKING_AWAY_SEC + 30) * 1000;
 const RECOVERY_MS = 1000;
 const UNKNOWN_GRACE_MS = 5000;
 
@@ -12,14 +14,14 @@ const UNKNOWN_GRACE_MS = 5000;
 export class ScreenIntervention {
   private history: { input: Observation; now: number }[] = [];
 
-  update(input: Observation, now: number) {
+  update(input: Observation, now: number, thresholdMs = PLAY_AFTER_MS) {
     // Keep actual gaze/scene observations, not an assumed risk while OCR is pending.
     // Resolved scene labels can then explain earlier observations without counting
     // missing gaze, a different page, or the time spent watching a recap.
-    this.history = this.history.filter(entry => entry.now > now - 60_000 && entry.now <= now);
+    this.history = this.history.filter(entry => entry.now > now - HISTORY_MS && entry.now <= now);
     this.history.push({ input, now });
-    this.history = this.history.slice(-1200);
-    const dwell = new Dwell();
+    this.history = this.history.slice(-HISTORY_MS / 50);
+    const dwell = new Dwell(thresholdMs);
     let result!: ReturnType<Dwell['update']>;
     for (const entry of this.history) {
       const observation = entry.input;
@@ -37,6 +39,7 @@ export class ScreenIntervention {
 }
 
 class Dwell {
+  constructor(private thresholdMs: number) {}
   private risk: ScreenRisk | null = null;
   private durationMs = 0;
   private previous?: number;
@@ -65,6 +68,6 @@ class Dwell {
     const current = input === 'gaze' || input === 'content';
     return { risk: this.risk, durationMs: this.durationMs, recovered,
       prepare: current && this.durationMs >= PREPARE_AFTER_MS,
-      play: current && this.durationMs >= PLAY_AFTER_MS };
+      play: current && this.durationMs >= this.thresholdMs };
   }
 }

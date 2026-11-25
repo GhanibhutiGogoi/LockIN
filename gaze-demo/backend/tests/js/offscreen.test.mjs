@@ -28,6 +28,23 @@ test('exactly thirty seconds of fresh off-screen evidence emits once, never befo
   run(m,30100,70000);assert.equal(m.snapshot(70000).count,1);
 });
 
+test('custom duration controls the actual event, snapshot and runtime changes',()=>{
+  const m=monitor();m.setThresholdMs(10000);
+  run(m,0,9900);assert.equal(m.snapshot(9900).count,0);
+  let r=m.observe(sample(10000));assert.equal(r.count,1);assert.equal(r.threshold_ms,10000);
+  assert.equal(r.events[0].reason,'continuous_offscreen_10s');
+  m.setThresholdMs(60000);
+  run(m,10100,59900);assert.equal(m.snapshot(59900).count,1);
+  r=m.observe(sample(60000));assert.equal(r.count,2);assert.equal(r.events[1].threshold_ms,60000);
+  run(m,60100,62000);assert.equal(m.snapshot(62000).count,2);
+});
+
+test('lowering the duration still waits for fresh valid evidence',()=>{
+  const m=monitor();run(m,0,15000);m.setThresholdMs(10000);
+  assert.equal(m.observe(sample(15100,null,{valid:false})).count,0);
+  assert.equal(m.observe(sample(15200)).count,1);
+});
+
 test('repeated short screen peeks preserve elapsed away time without counting the peeks',()=>{
   const e=new ScreenEvidence(),m=monitor();
   const observe=(t,outside)=>{const confirmed=e.update(t,outside);return m.observe(sample(t,confirmed,{valid:confirmed!==null}),t);};

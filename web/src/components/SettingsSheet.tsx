@@ -9,6 +9,7 @@ import { CONSENT_VERSION } from './ConsentScreen';
 import { Icon } from './Icon';
 import { LocalRecaps } from './LocalRecaps';
 import { AIConnectionSettings } from './AIConnectionSettings';
+import { LookingAwaySetting } from './LookingAwaySetting';
 
 const SLANG_SAMPLE: Record<SlangLevel, string> = {
   plain: 'Direct explanations with everyday language.',
@@ -110,6 +111,7 @@ export function SettingsSheet() {
           </Group>
 
           <Group title="When LockIn steps in">
+            <LookingAwaySetting />
             <Field label="Sensitivity" htmlFor="sensitivity">
               <input
                 id="sensitivity"
@@ -125,7 +127,7 @@ export function SettingsSheet() {
                 <span>Quick</span>
               </div>
               <p className="mt-2 text-[15px] text-graphite">
-                With the relevant services connected, a recap can start after about <b className="text-ink">{cfg.driftToLapseSec} seconds</b> of looking away, or <b className="text-ink">{cfg.windowInactiveLapseSec} seconds</b> in another app. Changes apply to your next session.
+                Adjusts focus detection sensitivity. In slide-only mode, app-switch reminders use about <b className="text-ink">{cfg.windowInactiveLapseSec} seconds</b>. Sensitivity changes apply to your next session; looking-away duration is set separately above.
               </p>
             </Field>
             <Toggle

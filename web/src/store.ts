@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Deck, FocusState, GazeTracking, LapseTrigger, MemoryDecision, MemoryTopic, RescueContext, RescuePack, SessionLog, SessionReview, UserSettings, VariantChoice } from './contracts/types';
+import { DEFAULT_LOOKING_AWAY_SEC, lookingAwaySeconds } from './lib/lookingAway';
 import type { ActivityLabel } from './lib/screenActivity';
 import type { CameraStatus } from './lib/camera';
 import { library } from './lib/library';
@@ -121,6 +122,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   roastsEnabled: true,
   backgroundStyle: 'auto',
   cooldownSec: 180,
+  lookingAwaySec: DEFAULT_LOOKING_AWAY_SEC,
 };
 
 export const emptyLive = (): Live => ({
@@ -137,12 +139,14 @@ export const emptyLive = (): Live => ({
   lapsesBySlide: {},
 });
 
+const savedSettings = load<Partial<UserSettings>>('lockin.settings', {}) ?? {};
+
 export const useApp = create<AppState>(() => ({
   finishingReport: false,
   userId,
   screen: 'desk',
   theme: load<Theme>('lockin.theme', 'system'),
-  settings: { ...DEFAULT_SETTINGS, ...load<Partial<UserSettings>>('lockin.settings', {}), userId },
+  settings: { ...DEFAULT_SETTINGS, ...savedSettings, lookingAwaySec: lookingAwaySeconds(savedSettings.lookingAwaySec), userId },
   decks: [],
   libraryReady: false,
   libraryWarning: null,
@@ -214,6 +218,7 @@ export const actions = {
   },
   setSettings(patch: Partial<UserSettings>) {
     const settings = { ...useApp.getState().settings, ...patch };
+    settings.lookingAwaySec = lookingAwaySeconds(settings.lookingAwaySec);
     useApp.setState({ settings });
     save('lockin.settings', settings);
   },

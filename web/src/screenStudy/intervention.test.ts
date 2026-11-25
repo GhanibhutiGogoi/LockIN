@@ -58,6 +58,22 @@ it('uses delayed classification only for gaze observations of that actual page',
   expect(gate.update({ scene: pendingScene(2), goalRequired: true }, 35_100).play).toBe(false);
 });
 
+it.each([5, 15, 60, 120, 300])('waits for the configured %i seconds, including durations longer than the old history window', seconds => {
+  const gate = new ScreenIntervention();
+  for (let ms = 0; ms < seconds * 1000; ms += 1000) {
+    expect(gate.update('gaze', ms, seconds * 1000).play).toBe(false);
+  }
+  expect(gate.update('gaze', seconds * 1000, seconds * 1000).play).toBe(true);
+});
+
+it('applies duration changes to actual accumulated evidence during a session', () => {
+  const gate = new ScreenIntervention();
+  for (let ms = 0; ms <= 20_000; ms += 1000) gate.update('content', ms, 60_000);
+  expect(gate.update('content', 21_000, 10_000)).toMatchObject({ durationMs: 21_000, play: true });
+  expect(gate.update('content', 22_000, 60_000)).toMatchObject({ durationMs: 22_000, play: false });
+  expect(gate.update('unknown', 23_000, 10_000).play).toBe(false);
+});
+
 it('can join two confirmed off-topic pages without treating their OCR delay as missing gaze', () => {
   const gate = new ScreenIntervention(), first = pendingScene(1), second = pendingScene(2);
   Object.assign(first, { status: 'ready', label: 'off-topic' });

@@ -106,6 +106,7 @@ beforeEach(async () => {
 afterEach(async () => {
   if (engine.isRunning()) await engine.endSession();
   Reflect.deleteProperty(registry.attention, 'usesOffscreenRule');
+  Reflect.deleteProperty(registry.attention, 'setLookingAwayDuration');
   Reflect.deleteProperty(registry.attention, 'suspend');
   Reflect.deleteProperty(registry.attention, 'needsCalibration');
   Reflect.deleteProperty(registry.adaptive, 'retrieveMemory');
@@ -119,6 +120,34 @@ async function lapseByAppSwitch() {
 }
 
 describe('session lifecycle', () => {
+  it('updates a running screen session from a 60-second delay to 10 seconds without restarting', async () => {
+    const share = await import('../lib/screenShare');
+    const setDuration = vi.fn();
+    Object.assign(registry.attention, { usesOffscreenRule: true, setLookingAwayDuration: setDuration });
+    const deck = { id: 'screen-custom-duration', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Outliers', text: 'Outliers are unusual observations.' }], slideCount: 1 };
+    store.actions.addDeck(deck);
+    store.actions.setSettings({ lookingAwaySec: 60 });
+    store.useApp.setState({ screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    for (let ms = 0; ms < 12_000; ms += 200) {
+      emit({ t: Date.now(), score: 0, confidence: 1,
+        gazeTracking: { state: 'candidate', awayMs: ms, thresholdMs: 60_000 } });
+      await advance(200);
+    }
+    expect(store.useApp.getState().rescue).toBeNull();
+    expect(store.useApp.getState().live.recapPreparation).toBe('ready');
+    store.actions.setSettings({ lookingAwaySec: 10 });
+    emit({ t: Date.now(), score: 0, confidence: 1,
+      gazeTracking: { state: 'away', awayMs: 12_000, thresholdMs: 10_000 } });
+    await advance(200);
+    expect(setDuration).toHaveBeenLastCalledWith(10);
+    expect(store.useApp.getState().rescue?.trigger).toBe('gaze');
+    expect(registry.content.getScript).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps memory-based variant selection for screen preparation', async () => {
     const share = await import('../lib/screenShare');
     const { DEFAULT_VARIANT } = await import('../contracts/defaults');

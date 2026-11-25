@@ -1,7 +1,12 @@
 /** Source-timestamp off-screen rule, independent of UI and model inference. */
 import {ATTENTION_TIMING} from './attention-policy.js';
 export class OffscreenMonitor {
-  constructor(){this.events=[];this.count=0;this.transitions=[];this.maxAwayMs=0;this.loggedState=null;this.lastReset=null;this.reset();}
+  constructor(){this.thresholdMs=ATTENTION_TIMING.lapseMs;this.events=[];this.count=0;this.transitions=[];this.maxAwayMs=0;this.loggedState=null;this.lastReset=null;this.reset();}
+  setThresholdMs(ms){
+    if(!Number.isFinite(ms)||ms<=0||ms===this.thresholdMs)return;
+    this.thresholdMs=ms;
+    if(this.awayMs<ms)this.latched=false;
+  }
   clear(){this.events=[];this.count=0;this.transitions=[];this.maxAwayMs=0;this.loggedState=null;this.reset();this.lastReset=null;}
   reset(){this.lastAt=null;this.latched=false;this.invalidate();}
   clearAway(reason,t=this.lastAt){if(this.awayMs>0)this.lastReset={reason,captured_at_ms:t,away_ms:this.awayMs};this.awayMs=0;}
@@ -24,9 +29,9 @@ export class OffscreenMonitor {
     this.previous=outside;
     if(outside){
       this.awayMs+=elapsed;this.returnMs=0;
-      if(this.awayMs>=ATTENTION_TIMING.lapseMs&&!this.latched){
+      if(this.awayMs>=this.thresholdMs&&!this.latched){
         this.latched=true;this.count++;
-        this.events.push({id:this.count,reason:'continuous_offscreen_30s',duration_ms:this.awayMs,captured_at_ms:t});
+        this.events.push({id:this.count,reason:`continuous_offscreen_${this.thresholdMs/1000}s`,duration_ms:this.awayMs,threshold_ms:this.thresholdMs,captured_at_ms:t});
         if(this.events.length>50)this.events.shift();
       }
       this.state=this.latched?'away':'candidate';
@@ -45,6 +50,6 @@ export class OffscreenMonitor {
       if(this.transitions.length>50)this.transitions.shift();
       this.loggedState=this.state;
     }
-    return {state:this.state,away_ms:this.awayMs,max_away_ms:this.maxAwayMs,threshold_ms:ATTENTION_TIMING.lapseMs,return_ms:this.returnMs,return_threshold_ms:ATTENTION_TIMING.screenReturnMs,last_reset:this.lastReset?{...this.lastReset}:null,count:this.count,events:this.events.map(e=>({...e})),transitions:this.transitions.map(t=>({...t}))};
+    return {state:this.state,away_ms:this.awayMs,max_away_ms:this.maxAwayMs,threshold_ms:this.thresholdMs,return_ms:this.returnMs,return_threshold_ms:ATTENTION_TIMING.screenReturnMs,last_reset:this.lastReset?{...this.lastReset}:null,count:this.count,events:this.events.map(e=>({...e})),transitions:this.transitions.map(t=>({...t}))};
   }
 }

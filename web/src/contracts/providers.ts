@@ -82,6 +82,8 @@ export interface AttentionProvider {
   skipCalibration?(): void;
   /** The provider emits an event after its own dwell rule. */
   readonly usesOffscreenRule?: boolean;
+  /** Change the sustained looking-away threshold without restarting calibration. */
+  setLookingAwayDuration?(seconds: number): void;
   /** Calibration: the UI shows a dot at `point`, then awaits this promise before moving on. */
   calibratePoint?(point: CalibrationPoint): Promise<void>;
   /** Called once the 20 s normal-reading baseline after the dots is over. */

@@ -18,6 +18,7 @@ import { beginScreenAnalysis, finishScreenAnalysis, getLiveScreenScene, getScree
 import { historicalFocus } from '../screenStudy/timeline';
 import { ScreenIntervention, type ScreenRisk } from '../screenStudy/intervention';
 import { uid } from '../lib/storage';
+import { lookingAwaySeconds } from '../lib/lookingAway';
 import { GazeTraceRecorder } from '../gazeTrace/recorder';
 import { memoryStyle } from '../providers/memory/adaptive';
 import { registry } from '../providers/registry';
@@ -214,6 +215,8 @@ async function startSession() {
   }
   // the user's own choice always wins over the model
   cfg.nudgeOnly = !!s.settings.nudgeOnly || !registry.canRecap();
+  cfg.driftToLapseSec = lookingAwaySeconds(s.settings.lookingAwaySec);
+  registry.attention.setLookingAwayDuration?.(cfg.driftToLapseSec);
 
   let profileMemo: string | undefined;
   try {
@@ -463,6 +466,9 @@ function tick() {
   const screenStudy = currentDeck().sourceType === 'screen';
   const active = windowActive();
   const provider = liveProvider ?? registry.attention;
+  const awaySeconds = lookingAwaySeconds(s.settings.lookingAwaySec);
+  rt.cfg.driftToLapseSec = awaySeconds;
+  provider.setLookingAwayDuration?.(awaySeconds);
   const offscreenLapse = rt.offscreenLapseAt !== null && now - rt.offscreenLapseAt >= 0 && now - rt.offscreenLapseAt < GAZE_FRESH_MS;
   rt.offscreenLapseAt = null;
   const hasContext = !screenStudy || hasStudyRecapContext(now);
@@ -612,7 +618,7 @@ function updateScreenIntervention(now: number, noteTaking: boolean): { score: nu
   const recovered = available && gaze.value.state === 'screen' && hasStudyRecapContext(now);
   const risk = away ? 'gaze' : available && gaze.value.state === 'screen' && scene
     ? { scene, goalRequired: !!state.screenGoal } : recovered ? null : 'unknown';
-  const gate = rt.screenGate.update(risk, now);
+  const gate = rt.screenGate.update(risk, now, lookingAwaySeconds(state.settings.lookingAwaySec) * 1000);
   if (rt.preparation && (gate.recovered || !active)) cancelScreenPreparation();
   if (gate.recovered && !rt.preparation && state.live.recapPreparation) {
     useApp.setState({ live: { ...useApp.getState().live, recapPreparation: undefined } });

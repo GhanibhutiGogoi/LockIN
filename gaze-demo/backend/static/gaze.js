@@ -28,6 +28,7 @@ export class GazeCapture {
     this.offscreen=new OffscreenMonitor();
   }
   cameraLive(){const track=this.stream?.getVideoTracks()[0];return !!track&&track.readyState==='live'&&!track.muted&&!this.video.paused&&!this.video.ended&&this.video.readyState>=2;}
+  setAwayThresholdMs(ms){this.offscreen.setThresholdMs(ms);}
   async start(borrowedStream) {
     this.stop();this.offscreen.clear();const round=this.round;
     const ownsStream=!borrowedStream;
@@ -75,7 +76,7 @@ export class GazeCapture {
         const sample=this.sample();
         if(!this.ready)return;
         const offscreen=this.offscreen.observe({t:d.capturedAt,valid:sample.valid,calibrated:sample.calibrated,outside:sample.on_screen===null?null:!sample.on_screen},performance.now());
-        this.onObservation?.({sample,offscreen,capturedAt:d.capturedAt,diagnostic:d.diagnostic?{...d.diagnostic,phase:this.phase,awayMs:offscreen.away_ms,returnMs:offscreen.return_ms,lastReset:offscreen.last_reset}:undefined});
+        this.onObservation?.({sample,offscreen,capturedAt:d.capturedAt,diagnostic:d.diagnostic?{...d.diagnostic,timing:{...d.diagnostic.timing,lapseMs:offscreen.threshold_ms},phase:this.phase,awayMs:offscreen.away_ms,returnMs:offscreen.return_ms,lastReset:offscreen.last_reset}:undefined});
         if(this.expressionEnabled&&this.expressionReady&&!this.expressionBusy&&d.expressionInput&&performance.now()-this.lastExpression>=400&&performance.now()-d.capturedAt<1200){
           this.expressionBusy=true;this.lastExpression=performance.now();this.expressionPending={...this.latest};
           const values=d.expressionInput;

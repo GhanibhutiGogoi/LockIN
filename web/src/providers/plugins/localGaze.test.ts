@@ -4,6 +4,7 @@ import type { GazeObservation } from '../../../../gaze-demo/backend/static/gaze.
 
 const capture = vi.hoisted(() => ({
   stop: vi.fn(),
+  setAwayThresholdMs: vi.fn(),
   resume: vi.fn(),
   observe: undefined as ((observation: GazeObservation) => void) | undefined,
 }));
@@ -20,6 +21,7 @@ vi.mock('../../../../gaze-demo/backend/static/gaze.js', () => ({
     suspend() { this.suspended = true; return true; }
     resume = capture.resume;
     stop = capture.stop;
+    setAwayThresholdMs = capture.setAwayThresholdMs;
     resetDiagnosticFrames() {}
     calibrationDiagnostics() { return { validation: { passed: true, meanErrorPx: 20, maxErrorPx: 30 } }; }
     revalidate() { this.status('calibrated'); return true; }
@@ -101,4 +103,16 @@ it('disposes a retained worker when camera playback rejects on resume', async ()
   await expect(gaze.start(stream)).rejects.toThrow('camera playback failed');
   expect(capture.stop).toHaveBeenCalledOnce();
   expect(gaze.needsCalibration).toBe(true);
+});
+
+it('applies the saved looking-away duration before capture and updates it while running', async () => {
+  vi.stubGlobal('document', { createElement: () => ({}) });
+  vi.stubGlobal('location', { href: 'http://127.0.0.1:5180/' });
+  const gaze = new LocalGazeProvider();
+  gaze.setLookingAwayDuration(60);
+  await gaze.start({} as MediaStream);
+  expect(capture.setAwayThresholdMs).toHaveBeenLastCalledWith(60_000);
+  gaze.setLookingAwayDuration(10);
+  expect(capture.setAwayThresholdMs).toHaveBeenLastCalledWith(10_000);
+  await gaze.stop();
 });

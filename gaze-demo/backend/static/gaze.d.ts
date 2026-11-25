@@ -96,6 +96,7 @@ export class GazeCapture {
   readonly phase: 'idle' | 'points' | 'fitting' | 'validation' | 'awaiting-start';
   readonly calibrationIssue: string | null;
   start(stream?: MediaStream): Promise<void>;
+  setAwayThresholdMs(ms: number): void;
   stop(): void;
   suspend(): boolean;
   resume(stream: MediaStream): Promise<boolean>;

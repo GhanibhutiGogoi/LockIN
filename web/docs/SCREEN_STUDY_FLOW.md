@@ -160,3 +160,16 @@ Replaying the original exported scene-completion times and gaze records through
 the repaired gate, while retaining the original second-media readiness time,
 authorizes that second playback at 13:06:43.923 (UTC+08:00). This is a diagnostic
 replay, not a new human trial or a guarantee for future latency.
+
+## Configurable distraction delay
+
+In **Settings → When LockIn steps in → Looking away duration**, enter a whole
+number from 5 to 300 seconds and click **Apply**. The default is 30 seconds.
+The value is saved in this browser and applies immediately, including during an
+active session, without recalibration. Existing valid dwell is retained when
+the threshold changes; missing tracking is never counted as distraction.
+
+Screen sharing uses this delay for both looking away and confirmed off-topic
+pages. The gaze countdown, screen intervention gate, and local gaze monitor use
+the same value. Short settings do not guarantee immediate video playback: the
+recap must also finish generating, and cooldown and note-taking rules still apply.
