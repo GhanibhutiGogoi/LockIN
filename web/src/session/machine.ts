@@ -156,12 +156,12 @@ export function step(
   // Effective score. Window inactive → 0. Note-taking → camera can't cause drift.
   let effective: number | null;
   if (!input.windowActive) effective = 0;
-  else if (input.noteTaking) effective = Math.max(input.score ?? cfg.enterFocused, cfg.enterFocused);
+  else if (input.noteTaking) effective = m.state === 'recovering' ? null : Math.max(input.score ?? cfg.enterFocused, cfg.enterFocused);
   else effective = input.score;
 
-  // Low-confidence frame with window active: hold everything as-is.
+  // Missing evidence holds the state, but cannot count toward continuous recovery.
   if (effective === null) {
-    return { m: { ...m, windowInactiveSince, eyesClosedSince }, events };
+    return { m: { ...m, windowInactiveSince, eyesClosedSince, aboveSince: null }, events };
   }
 
   const aboveSince = effective >= cfg.enterFocused ? (m.aboveSince ?? now) : null;

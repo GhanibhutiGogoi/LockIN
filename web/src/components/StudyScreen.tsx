@@ -11,6 +11,7 @@ import { Icon } from './Icon';
 import { IntegrationsButton } from './IntegrationsPanel';
 import { Rescue } from './Rescue';
 import { SlideView } from './SlideView';
+import { RecoveryStatus } from './RecoveryStatus';
 
 export function StudyScreen() {
   const deck = useDeck();
@@ -133,7 +134,7 @@ export function StudyScreen() {
       )}
 
       <header className="absolute inset-x-0 top-0 z-20 flex h-16 items-center gap-1 pl-[max(12px,env(safe-area-inset-left))] pr-[max(12px,env(safe-area-inset-right))] sm:pl-5 sm:pr-4">
-        <RecoveringLine />
+      <RecoveryStatus />
         <span className="flex-1" />
         {/* while you read, all that's left is the camera light: a dot, like the one in a menu bar */}
         <CameraDot hidden={!barHidden} />
@@ -178,6 +179,8 @@ export function StudyScreen() {
 }
 
 function ScreenStudyPanel({ text }: { text?: string }) {
+  const live = useApp(s => s.live);
+  const cooldown = Math.max(0, Math.ceil((live.cooldownUntil - Date.now()) / 1000));
   const preparation = useApp(s => s.live.recapPreparation);
   const takingNotes = useApp(s => s.live.noteTakingUntil !== null);
   const ocr = useApp((s) => s.screenOcr);
@@ -213,6 +216,8 @@ function ScreenStudyPanel({ text }: { text?: string }) {
           : preparation === 'ready' ? 'Recap ready. It will only interrupt a sustained distraction.'
           : 'A recap needs readable study-related text and a connected video service.'}
       </p>}
+      {cooldown > 0 && <p className="mt-2 text-sm text-graphite">Rest between clips · {cooldown} seconds remaining.</p>}
+      {preparation && <p className="mt-2 text-sm text-graphite">Confirmed distraction · {Math.floor((live.screenDwellMs ?? 0) / 1000)} / 30 seconds. Missing tracking or an unclassified page can pause this count.</p>}
       {ocr && <p className="mt-2 text-[14px] text-graphite" data-screen-ocr>{ocr.message}</p>}
       {goal && (
         <dl className="mt-5 grid gap-2 text-[15px]">
@@ -428,21 +433,6 @@ function DeckRail({ quiet }: { quiet: boolean }) {
         <Icon name="chevron-right" />
       </button>
     </footer>
-  );
-}
-
-/** Coming back after a drift: a line that fills while your eyes stay on the slide. */
-function RecoveringLine() {
-  const state = useApp((s) => s.live.state);
-  const progress = useApp((s) => s.live.recoverProgress);
-  if (state !== 'recovering') return null;
-  return (
-    <div className="fade-in pointer-events-none absolute top-16 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-2 md:top-0 md:left-5 md:h-16 md:translate-x-0 md:items-start" role="status">
-      <span className="text-[14px] font-semibold">Locking back in</span>
-      <span className="block h-1 w-40 overflow-hidden rounded-full bg-rule-strong">
-        <span className="block h-full rounded-full bg-ok transition-[width] duration-150" style={{ width: `${progress * 100}%` }} />
-      </span>
-    </div>
   );
 }
 

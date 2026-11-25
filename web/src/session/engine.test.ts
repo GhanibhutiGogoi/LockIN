@@ -198,6 +198,51 @@ describe('session lifecycle', () => {
     expect(store.useApp.getState().rescue).toBeNull();
   });
 
+  it('recovers after reading confirmed study content and permits a later delayed off-topic recap', async () => {
+    const share = await import('../lib/screenShare');
+    const deck = { id: 'screen-return', title: 'Shared screen', sourceType: 'screen' as const,
+      slides: [{ index: 0, title: 'Outliers', text: 'Outliers are unusual observations.' }], slideCount: 1 };
+    store.actions.addDeck(deck);
+    store.useApp.setState({ screenGoal: 'Data mining', screenReading: 'ready' });
+    await engine.enterStudy();
+    vi.spyOn(share, 'getStudyScreenContext').mockReturnValue({ deck, slideIndex: 0 });
+    const timeline = share.getScreenTimeline()!;
+    let scene = timeline.observe(Date.now(), true, 1600, 900, 'monitor');
+    Object.assign(scene, { status: 'ready', label: 'related' });
+    const emit = vi.mocked(registry.attention.onSample).mock.calls.at(-1)![0];
+    async function observe(gaze: 'screen' | 'away', ms: number) {
+      for (let i = 0; i < ms; i += 200) {
+        scene.observedUntil = Date.now();
+        emit({ t: Date.now(), score: gaze === 'screen' ? 100 : 0, confidence: 1,
+          gazeTracking: { state: gaze, awayMs: gaze === 'away' ? i : 0, thresholdMs: 30000 } });
+        await advance(200);
+      }
+    }
+    await observe('away', 32_000);
+    expect(store.useApp.getState().rescue?.phase).toBe('playing');
+    engine.clipEnded(); engine.answerQuiz(0, 0); engine.finishRescue();
+    timeline.breakScene(); store.useApp.setState({ screenReading: 'on-lockin' });
+    await observe('screen', 6000);
+    expect(store.useApp.getState().live).toMatchObject({ state: 'recovering', recoverProgress: 0, recoveryWait: 'study-window' });
+    scene = timeline.observe(Date.now(), true, 1600, 900, 'monitor');
+    Object.assign(scene, { status: 'ready', label: 'related' });
+    store.useApp.setState({ screenReading: 'ready' });
+    await observe('screen', 2000);
+    expect(store.useApp.getState().live.recoverProgress).toBeGreaterThan(0);
+    await observe('screen', 3000);
+    expect(store.useApp.getState().live.state).toBe('focused');
+    // Cooldown remains explicit and can expire normally; no permanent recovery lock.
+    await observe('screen', 181_000);
+    scene = timeline.observe(Date.now(), true, 1600, 900, 'monitor');
+    await observe('screen', 35_000);
+    expect(store.useApp.getState().rescue).toBeNull();
+    Object.assign(scene, { status: 'ready', label: 'off-topic' });
+    await observe('screen', 2000);
+    expect(store.useApp.getState().rescue).toMatchObject({ phase: 'playing', trigger: 'content' });
+    expect(timeline.controlSamples.some(sample => sample.cooldownRemainingMs > 0)).toBe(true);
+    expect(timeline.controlSamples.some(sample => sample.dwellMs >= 30_000)).toBe(true);
+  });
+
   it('plays delayed media after brief tracking loss while distraction continues', async () => {
     const share = await import('../lib/screenShare');
     const deck = { id: 'screen-delayed', title: 'Shared screen', sourceType: 'screen' as const,

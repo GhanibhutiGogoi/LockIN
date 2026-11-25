@@ -6,7 +6,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const url = process.argv[2] ?? 'http://127.0.0.1:5181/';
-const deadlineMode = process.argv.includes('--deadline');
+const recoveryMode = process.argv.includes('--recovery');
+const deadlineMode = process.argv.includes('--deadline') || recoveryMode;
 const realMedia = deadlineMode || process.argv.includes('--real-media');
 const voiceFile = new URL('../../.runtime/windows/narration-url.txt', import.meta.url);
 const voiceUrl = process.env.LOCKIN_TEST_VOICE_URL ?? (existsSync(voiceFile) ? readFileSync(voiceFile, 'utf8').trim() : 'http://127.0.0.1:18114/');
@@ -70,7 +71,7 @@ try {
     await page.route('http://127.0.0.1:8013/media/live', route => route.fulfill({ json: verified.media.result }));
   }
   await page.goto(url);
-  await page.evaluate(async voiceUrl => {
+  await page.evaluate(async ({ voiceUrl, recoveryMode }) => {
     const { registerAttentionPlugin, registry } = await import('/src/providers/registry.ts');
     const { actions } = await import('/src/store.ts');
     const state = window.flow.state;
@@ -97,8 +98,8 @@ try {
     registry.set('attention', { mode: 'flow-gaze' });
     registry.setAI({ content: { mode: 'http', url: 'http://127.0.0.1:8013/' },
       media: { mode: 'http', url: 'http://127.0.0.1:8013/', voiceUrl } });
-    actions.setSettings({ slangLevel: 'plain' });
-  }, voiceUrl);
+    actions.setSettings({ slangLevel: 'plain', ...(recoveryMode ? { cooldownSec: 0 } : {}) });
+  }, { voiceUrl, recoveryMode });
 
   async function start() {
     await page.locator('#screen-goal').fill('Study data mining and outlier detection');
@@ -111,12 +112,18 @@ try {
   }
   async function completeRescue() {
     const deadline = Date.now() + (realMedia ? 420_000 : 45_000);
+    let lastStatus = Date.now();
     let phase;
     while (Date.now() < deadline) {
       phase = await page.evaluate(async () => (await import('/src/store.ts')).useApp.getState().rescue?.phase);
       const failure = await page.evaluate(async () => (await import('/src/lib/screenShare.ts')).getScreenTimeline()?.events.find(e => e.type === 'preparation-error'));
       if (failure) throw new Error(`Preparation failed: ${failure.detail}`);
       if (phase === 'loading' || (deadlineMode && phase === 'playing')) break;
+      if (Date.now() - lastStatus > 20_000) {
+        lastStatus = Date.now();
+        console.log('WAITING', await page.evaluate(async () => ({ live: (await import('/src/store.ts')).useApp.getState().live,
+          controls: (await import('/src/lib/screenShare.ts')).getScreenTimeline()?.controlSamples.slice(-1) })));
+      }
       await page.waitForTimeout(250);
     }
     if (phase !== 'loading' && !(deadlineMode && phase === 'playing')) {
@@ -153,7 +160,8 @@ try {
     assert.ok(report.log.samples.length > 0);
     assert.ok(report.log.gazeTrace.samples.length > 0);
     assert.equal(report.log.rescues[0].context.trigger, name);
-    assert.equal(report.questions.length, 1);
+    assert.equal(report.questions.length, recoveryMode ? 2 : 1);
+    if (recoveryMode) assert.deepEqual(report.log.rescues.map(r => r.context.trigger), ['gaze', 'content']);
     assert.ok(report.log.screenAnalysis.windows.some(w => w.focusedMs > 0));
     const { summary, measurements, events } = report.log.screenAnalysis;
     assert.ok(summary.focusedMs > 5000);
@@ -162,7 +170,7 @@ try {
       .reduce((total, m) => total + m.durationMs, 0);
     assert.ok(postRecapFocusMs >= 5000, `Only ${postRecapFocusMs}ms focused after returning to study`);
     await page.getByText(/After your last recap:/).waitFor();
-    writeFileSync(new URL(`../../.runtime/windows/browser-${name}.json`, import.meta.url), JSON.stringify(report, null, 2));
+    writeFileSync(new URL(`../../.runtime/windows/browser-${recoveryMode ? 'recovery' : name}.json`, import.meta.url), JSON.stringify(report, null, 2));
     console.log(`PASS: ${name} report, aligned measurements and timestamp export.`);
   }
 
@@ -190,6 +198,14 @@ try {
       readyToPlaybackRequestSeconds: (requested.timestamp - ready.timestamp) / 1000, serviceTimings, events };
     writeFileSync(new URL(deadlineMode ? '../../.runtime/windows/deadline-playback-timing.json' : '../../.runtime/windows/real-playback-timing.json', import.meta.url), JSON.stringify(timing, null, 2));
     console.log('REAL TIMING', JSON.stringify(timing));
+    if (recoveryMode) {
+      assert.equal(await page.evaluate(async () => (await import('/src/store.ts')).useApp.getState().live.state), 'focused');
+      console.log('PASS: confirmed reading completes recovery and clears the progress indicator.');
+      await page.evaluate(() => { window.flow.content('shopping'); window.flow.focus(false); });
+      await page.locator('[data-screen-activity="off-topic"]').waitFor({ timeout: 60_000 });
+      await completeRescue();
+      console.log('PASS: another off-topic page triggers a second real recap in the same session (test cooldown disabled).');
+    }
     await finish('gaze');
     assert.deepEqual(errors, []);
     console.log(`PASS: live script -> real voice -> browser composition -> ${deadlineMode ? '30-second threshold' : 'brief tracking loss'} -> playback -> quiz.`);

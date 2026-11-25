@@ -4,6 +4,40 @@ import { ScreenTimeline } from './timeline';
 
 afterEach(() => vi.unstubAllGlobals());
 
+it('prioritizes the current page and continues OCR while an older classification waits', async () => {
+  let releaseOcr!: () => void, releaseLabel!: () => void;
+  const ocrWait = new Promise<void>(resolve => { releaseOcr = resolve; });
+  const labelWait = new Promise<void>(resolve => { releaseLabel = resolve; });
+  let ocrCount = 0, labelCount = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.endsWith('/status')) return new Response('{"status":"ready"}');
+    if (url.endsWith('/text')) {
+      if (++ocrCount === 1) await ocrWait;
+      return new Response('{"lines":["Substantive learning content"]}');
+    }
+    if (++labelCount === 1) await labelWait;
+    return new Response('{"label":"off-topic"}');
+  }));
+  const timeline = new ScreenTimeline(0, 'Data mining');
+  const completed: number[] = [];
+  const processor = new ScreenProcessor(timeline, scene => {
+    if (scene.status === 'ready' && !completed.includes(scene.id)) completed.push(scene.id);
+  });
+  const first = timeline.observe(0, true, 100, 50, 'monitor'); processor.enqueue(first, new Blob());
+  await vi.waitFor(() => expect(ocrCount).toBe(1));
+  const old = timeline.observe(1000, true, 100, 50, 'monitor'); processor.enqueue(old, new Blob());
+  const current = timeline.observe(2000, true, 100, 50, 'monitor'); processor.enqueue(current, new Blob());
+  // Both queued OCR calls finish even though the first classification is blocked.
+  releaseOcr();
+  await vi.waitFor(() => { expect(current.status).toBe('ready'); expect(ocrCount).toBe(3); });
+  expect(completed).toEqual([first.id, current.id, old.id]);
+  expect(labelCount).toBe(1);
+  expect(first.label).toBe('checking');
+  releaseLabel(); await processor.finish();
+  expect([first, old, current].every(scene => scene.label === 'off-topic')).toBe(true);
+  expect(current.classificationStartedAt).toBeDefined();
+});
+
 it('retains delayed results on their scene, preserves OCR boxes and classifies against the goal', async () => {
   const fetcher = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(url.endsWith('/status') ? { status: 'ready' }
     : url.endsWith('/text') ? { lines: ['Data mining'], blocks: [{ text: 'Data mining', confidence: .9, polygon: [[0, 0], [100, 0], [100, 50], [0, 50]] }], image: { width: 100, height: 50 } }

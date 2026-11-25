@@ -26,7 +26,7 @@ function lab(){
   const context={document,GazeCapture:Camera,innerWidth:1200,innerHeight:800,window:{addEventListener(){}},
     performance:{now:()=>1000},Date,Blob,URL:{createObjectURL:blob=>{downloads.push(blob);return 'blob:test';},revokeObjectURL(){}},
     setInterval:fn=>{tick=fn;return 1;},clearInterval(){},setTimeout:fn=>{fn();return 1;}};
-  vm.createContext(context);vm.runInContext(source.replace(/^import .*;\n/gm,'')+'\nglobalThis.camera=typeof gaze!=="undefined"?gaze:null;',context);
+  vm.createContext(context);vm.runInContext(source.replace(/^import .*;\r?\n/gm,'')+'\nglobalThis.camera=typeof gaze!=="undefined"?gaze:null;',context);
   return {node,context,downloads,tick:()=>tick?.(),resolve:()=>resolveStart?.(),reject:e=>rejectStart?.(e),
     async start(){assert.equal(typeof node('start-camera').onclick,'function','start control is not wired');const pending=node('start-camera').onclick();return {pending};}};
 }

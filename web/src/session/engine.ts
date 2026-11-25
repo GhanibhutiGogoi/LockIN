@@ -22,7 +22,7 @@ import { GazeTraceRecorder } from '../gazeTrace/recorder';
 import { memoryStyle } from '../providers/memory/adaptive';
 import { registry } from '../providers/registry';
 import { LocalAdaptiveProvider } from '../providers/local';
-import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI } from '../store';
+import { actions, currentDeck, emptyLive, useApp, type ReviewQuestion, type RescueUI, type RecoveryWait } from '../store';
 import { DEFAULT_CONFIG, configForSensitivity, createMachine, dispatch, step, type Machine, type MachineAction, type MachineEvent } from './machine';
 import { focusShare, scoreSession } from './metrics';
 import { clearPacks, DEFAULT_VARIANT, getPack } from './packs';
@@ -486,6 +486,17 @@ function tick() {
   const gazeFresh = gaze && now >= gaze.t && now - gaze.t < GAZE_FRESH_MS;
   // 1 Hz log — raw video never appears here, only derived numbers.
   const sec = Math.floor(sessionSec(now));
+  // Also retain the exact trigger tick, which may fall between 1 Hz samples.
+  if (sec !== rt.lastLogSec || screenControl?.trigger) {
+    const timeline = screenStudy ? getScreenTimeline() : undefined;
+    if (timeline) {
+      timeline.controlSamples.push({ timestamp: now, state: m.state, dwellMs: screenControl?.durationMs ?? 0,
+        cooldownRemainingMs: Math.max(0, m.cooldownUntil - now), recoveryWait: screenControl?.recoveryWait,
+        preparation: useApp.getState().live.recapPreparation, pageVisible: !document.hidden, windowActive: active,
+        gazeAgeMs: gaze ? Math.max(0, now - gaze.t) : null });
+      if (timeline.controlSamples.length > 7200) timeline.controlSamples.shift();
+    }
+  }
   if (sec !== rt.lastLogSec) {
     rt.lastLogSec = sec;
     // Waiting for usable screen context is not a measured focused sample.
@@ -519,6 +530,8 @@ function tick() {
       effective: m.effective,
       windowActive: screenStudy || active,
       recoverProgress,
+      recoveryWait: screenControl?.recoveryWait,
+      screenDwellMs: screenControl?.durationMs,
       cooldownUntil: m.cooldownUntil,
       elapsed: (now - m.sessionStart - m.pausedMs - (m.pausedAt ? now - m.pausedAt : 0)) / 1000,
     },
@@ -585,7 +598,7 @@ function cancelScreenPreparation() {
   useApp.setState({ live: { ...useApp.getState().live, recapPreparation: undefined } });
 }
 
-function updateScreenIntervention(now: number, noteTaking: boolean): { score: number | null; trigger?: ScreenRisk } {
+function updateScreenIntervention(now: number, noteTaking: boolean): { score: number | null; trigger?: ScreenRisk; recoveryWait?: RecoveryWait; durationMs?: number } {
   if (!rt) return { score: null };
   const state = useApp.getState();
   if (state.rescue || ['lapse', 'rescue'].includes(rt.machine.state)) return { score: null };
@@ -597,7 +610,8 @@ function updateScreenIntervention(now: number, noteTaking: boolean): { score: nu
   const away = available && ['candidate', 'away'].includes(gaze.value.state);
   const unrelated = available && gaze.value.state === 'screen' && scene?.status === 'ready' && scene.label === 'off-topic';
   const recovered = available && gaze.value.state === 'screen' && hasStudyRecapContext(now);
-  const risk = away ? 'gaze' : unrelated ? 'content' : recovered ? null : 'unknown';
+  const risk = away ? 'gaze' : available && gaze.value.state === 'screen' && scene
+    ? { scene, goalRequired: !!state.screenGoal } : recovered ? null : 'unknown';
   const gate = rt.screenGate.update(risk, now);
   if (rt.preparation && (gate.recovered || !active)) cancelScreenPreparation();
   if (gate.recovered && !rt.preparation && state.live.recapPreparation) {
@@ -606,7 +620,11 @@ function updateScreenIntervention(now: number, noteTaking: boolean): { score: nu
   const canPrepare = !rt.cfg.nudgeOnly && now >= rt.machine.cooldownUntil;
   if (gate.prepare && canPrepare && !rt.preparation) prepareScreenRescue(gate.risk!, now);
   const score = away || unrelated ? 0 : recovered ? 100 : null;
-  return { score, trigger: gate.play && canPrepare && rt.preparation?.pack ? gate.risk! : undefined };
+  const recoveryWait: RecoveryWait | undefined = noteTaking ? 'notes' : !available ? 'tracking'
+    : state.screenReading === 'on-lockin' ? 'study-window' : gaze.value.state !== 'screen' ? 'look-at-screen'
+    : unrelated ? 'off-topic' : !recovered ? 'reading' : undefined;
+  return { score, recoveryWait, durationMs: gate.durationMs,
+    trigger: gate.play && canPrepare && rt.preparation?.pack ? gate.risk! : undefined };
 }
 
 function prepareScreenRescue(trigger: ScreenRisk, now: number) {

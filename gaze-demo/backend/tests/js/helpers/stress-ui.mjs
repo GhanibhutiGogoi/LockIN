@@ -6,7 +6,7 @@ import * as contract from '../../../static/stress-contract.js';
 // Only imports and automatic page boot are replaced; handlers/function bodies are real.
 const source=fs.readFileSync(new URL('../../../static/stress.js',import.meta.url),'utf8');
 if(!source.includes('const requestedUser='))throw Error('UI bootstrap boundary changed');
-const controller=source.replace(/^import .*;\n/gm,'').split('const requestedUser=')[0]+`
+const controller=source.replace(/^import .*;\r?\n/gm,'').split('const requestedUser=')[0]+`
  globalThis.testUI={upload,present,render,stopInputs,gaze,learningBus,
  initialize(s){identity={user:{id:'test-user'},token:'test-only'};session=s;
  config={feature_names:[],feature_schema:'test',expression_model:{assets_available:true}};

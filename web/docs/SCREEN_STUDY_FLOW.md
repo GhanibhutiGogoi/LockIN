@@ -75,7 +75,7 @@ is capture-to-OCR latency. `classifiedAt` records the later relevance response.
 
 Capture checks run independently of OCR, nominally every 750 ms. Change detection ignores the top 12% and bottom 6% (toolbars and clocks), and requires more than 0.6% changed pixels in the remaining region. The comparison stays anchored to the original scene frame so gradual scrolling accumulates. These tolerances can miss small changes; they are not proof of pixel-identical content. A recent page is held until the next capture establishes a change; capture gaps longer than 2.5 seconds and pauses break continuity.
 
-Stable scenes reuse OCR, with a two-minute refresh. The queue retains one active and at most four waiting frames, removing the shortest waiting visit first when full. A stable current scene is prioritized during learning; longer visits are prioritized while finalizing the report. Finalization waits at most 90 seconds for remaining analysis. Unprocessed scenes remain explicitly unknown. Historical results stay aligned to their original capture timestamps.
+Stable scenes reuse OCR, with a two-minute refresh. OCR and relevance classification now have separate, bounded queues: at most one request of each kind runs at once. A slow classification no longer blocks OCR of the newest screenshot. The current scene has priority even before its first stable second; queued OCR retains at most four frames, dropping the shortest waiting visit first. Classification retains at most four waiting text results. Finalization waits at most 90 seconds for remaining analysis. Unprocessed scenes remain explicitly unknown. Historical results stay aligned to their original capture timestamps.
 
 Consecutive valid gaze samples with the same state support the interval between them only when they are less than 1.2 seconds apart. Unknown or conflicting samples are never filled as focused. Other samples have at most 350 ms of forward support. The report shows total measured coverage, unknown-time reasons, and focused/unknown time after the latest recap.
 
@@ -93,6 +93,7 @@ node web/scripts/replay-screen-flow.mjs
 $env:LOCKIN_TEST_VOICE_URL = 'http://VOICE_HOST:18114/'
 node web/scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --real-media
 node web/scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --deadline
+node web/scripts/replay-screen-flow.mjs http://127.0.0.1:5181/ --recovery
 ```
 
 The API check creates a real short video from synthetic bilingual text. The browser replay uses controlled gaze, real OCR/relevance and that verified MP4 to test both intervention paths, actual playback, quiz completion and report export. It replays the script/media responses to avoid regenerating the same validation video. Artifacts are saved under `.runtime/windows/`; this does not replace validation of a real person's gaze and calibration.
@@ -109,3 +110,53 @@ fixture. This measures the pipeline after relevant study content is recognized;
 it does not validate webcam gaze accuracy or user browser permissions.
 
 The relevance model selects numbered OCR blocks; the server resolves evidence directly from those blocks. Known tracking overlays and application controls are filtered before classification and recap generation. Scene diagnostics retain the raw decision, resolved evidence and validation reason. Screen recap caches use normalized study text rather than observation indices, while retaining voice, style, pacing and connection boundaries.
+
+## Recovery and background tracking fixes (2026-11-25)
+
+The physical-device session `s_3eudes2npgc0` exposed three distinct issues:
+recovery had no explanation while waiting for confirmed study context; serialized
+OCR/classification delayed off-topic evidence past page changes; and gaze samples
+stopped for 92.986 seconds while another window/tab was being read. This was not
+a second narration failure: a second recording had already been prepared.
+
+Camera capture now polls actual decoded-frame counts even when the browser
+supports presentation callbacks. A paused presentation callback alone cannot
+freeze gaze inference. Advancing playback time alone is still insufficient:
+frozen counters, muted/ended tracks, and unknown freshness after long polling
+gaps remain invalid. Browser/OS suspension of the entire capture or timer is
+still possible; no extrapolated gaze is used to conceal it.
+
+The intervention gate retains up to 60 seconds (at most 1200 ticks) of actual
+gaze/scene observations. A delayed classification can resolve those observations
+for that exact page; the 30-second clock does not start over just because OCR was
+slow. This is not a timer backdated from a screenshot alone. Missing gaze,
+note-taking, unknown pages and genuine recovery retain their existing rules.
+Current evidence must still be off-task and media must be ready before playback;
+an old off-topic page cannot trigger while the current page is unknown or related.
+
+After a recap, recovery requires four seconds of continuous fresh gaze on
+confirmed relevant study material. Unknown evidence resets this progress.
+The UI now distinguishes waiting for tracking, opening the shared study window,
+reading/classifying that page, and returning from unrelated material. It shows a
+progress bar only while confirming recovery. The study panel also shows confirmed
+distraction time and any remaining clip cooldown. The default 180-second cooldown
+and 30-second distraction threshold have not been reduced.
+
+Reports now include `screenAnalysis.controlSamples` (1 Hz plus trigger ticks,
+bounded to 7200 entries): state, confirmed dwell, remaining cooldown, recovery wait
+reason, preparation state, page visibility, window focus and gaze sample age.
+Scene `classificationStartedAt` separates classifier queueing from inference.
+No additional screenshot or camera pixels are stored.
+
+`--recovery` uses controlled gaze but real OCR, relevance, script, narration and
+playback. It verifies a first gaze recap, quiz, recovery while reading study
+content, then a second off-topic recap in the same session. Only this isolated
+test browser sets its cooldown to zero to avoid a three-minute wait; unit tests
+also cover normal cooldown expiry. The result is `browser-recovery.json` under
+`.runtime/windows/`. Restart Vite before this development replay after edits;
+the harness imports app modules directly and must not mix HMR module instances.
+
+Replaying the original exported scene-completion times and gaze records through
+the repaired gate, while retaining the original second-media readiness time,
+authorizes that second playback at 13:06:43.923 (UTC+08:00). This is a diagnostic
+replay, not a new human trial or a guarantee for future latency.

@@ -43,6 +43,7 @@ async function camera(t,{expression=false,model,workerReady=true,sourceWidth=640
   const nodes={calibration:{hidden:true},target:{style:{}},'cal-status':{textContent:''}};
   const globals={document:{createElement:()=>({getContext:()=>({drawImage(_video,...rect){draws.push(rect);},getImageData(...rect){reads.push(rect);return {data:new Uint8ClampedArray(4)};}})}),getElementById:id=>nodes[id]},
     navigator:{mediaDevices:{getUserMedia:async()=>stream}},location:{origin:'http://localhost:8000'},innerWidth:1000,innerHeight:800,devicePixelRatio:2,
+    screen:{width:1000,height:800,availLeft:0,availTop:0},screenX:0,screenY:0,
     Worker:class {
       postMessage(message){
         messages.push(message);
@@ -172,6 +173,27 @@ test('advancing playback clock without new presented frames cannot refresh gaze'
 test('unknown presented-frame freshness fails closed even with a running camera',async t=>{
   const c=await camera(t);c.video.getVideoPlaybackQuality=undefined;c.tick(1000);
   assert.equal(c.gaze.sample().valid,false);
+});
+
+test('background capture continues when presentation callbacks stop but decoded frames advance',async t=>{
+  const c=await camera(t);
+  c.gaze.hasFrameCallbacks=true;
+  c.gaze.presentedFrame={id:1,at:1000};
+  c.tick(1000);
+  for(let time=1100;time<=5000;time+=100){c.video.presentedFrames++;c.tick(time);}
+  assert.equal(c.gaze.sample().valid,true);
+  assert.equal(c.gaze.latest.t,5000);
+  // A stopped decoder and an advancing playback clock must still expire.
+  c.video.currentTime=20;c.tick(6300);
+  assert.equal(c.gaze.sample().valid,false);
+});
+
+test('decoded-frame fallback does not refresh a frame first observed after a long polling gap',async t=>{
+  const c=await camera(t);c.gaze.hasFrameCallbacks=true;c.tick(1000);
+  c.video.presentedFrames=50;c.tick(5000);
+  assert.equal(c.gaze.sample().valid,false);
+  c.tick(5100);assert.equal(c.gaze.sample().valid,false);
+  c.video.presentedFrames=51;c.tick(5200);assert.equal(c.gaze.sample().valid,true);
 });
 
 for(const state of ['ended','muted','paused'])test(`gaze immediately becomes invalid when camera is ${state}`,async t=>{

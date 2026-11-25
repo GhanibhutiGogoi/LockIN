@@ -19,6 +19,7 @@ export interface ScreenScene {
   processingStartedAt?: number;
   ocrDurationMs?: number;
   classifiedAt?: number;
+  classificationStartedAt?: number;
   text?: string;
   studyText?: string;
   classification?: { reason?: string; rawDecision?: string | null; evidence?: { id: number; text: string }[] };
@@ -59,6 +60,8 @@ export interface ScreenAnalysis {
   droppedGazeSamples: number;
   droppedScenes: number;
   events: { timestamp: number; type: string; sceneId?: number; detail?: string }[];
+  controlSamples?: { timestamp: number; state: string; dwellMs: number; cooldownRemainingMs: number;
+    recoveryWait?: string; preparation?: string; pageVisible: boolean; windowActive: boolean; gazeAgeMs: number | null }[];
   summary?: ScreenSummary;
 }
 

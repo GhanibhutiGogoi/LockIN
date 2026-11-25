@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { ScreenIntervention } from './intervention';
+import type { ScreenScene } from './types';
 
 it('prepares before playback and only after continuous current evidence', () => {
   const gate = new ScreenIntervention();
@@ -41,4 +42,46 @@ it('requires fresh dwell after prolonged loss but does not report recovery', () 
   for (let ms = 0; ms <= 31_000; ms += 100) gate.update('gaze', ms);
   for (let ms = 31_100; ms <= 38_000; ms += 100) expect(gate.update('unknown', ms).recovered).toBe(false);
   expect(gate.update('gaze', 38_100)).toMatchObject({ durationMs: 0, play: false });
+});
+
+const pendingScene = (id: number): ScreenScene => ({ id, timestamp: 0, observedUntil: 40_000,
+  width: 100, height: 100, displaySurface: 'monitor', status: 'pending', label: 'checking' });
+
+it('uses delayed classification only for gaze observations of that actual page', () => {
+  const gate = new ScreenIntervention(), scene = pendingScene(1);
+  for (let ms = 0; ms < 35_000; ms += 100) {
+    expect(gate.update({ scene, goalRequired: true }, ms).play).toBe(false);
+  }
+  Object.assign(scene, { status: 'ready', label: 'off-topic' });
+  expect(gate.update({ scene, goalRequired: true }, 35_000)).toMatchObject({ play: true, durationMs: 35_000 });
+  // A newly opened, unclassified page is not the old off-topic page.
+  expect(gate.update({ scene: pendingScene(2), goalRequired: true }, 35_100).play).toBe(false);
+});
+
+it('can join two confirmed off-topic pages without treating their OCR delay as missing gaze', () => {
+  const gate = new ScreenIntervention(), first = pendingScene(1), second = pendingScene(2);
+  Object.assign(first, { status: 'ready', label: 'off-topic' });
+  for (let ms = 0; ms < 20_000; ms += 100) gate.update({ scene: first, goalRequired: true }, ms);
+  for (let ms = 20_000; ms < 40_000; ms += 100) gate.update({ scene: second, goalRequired: true }, ms);
+  Object.assign(second, { status: 'ready', label: 'off-topic' });
+  expect(gate.update({ scene: second, goalRequired: true }, 40_000).play).toBe(true);
+});
+
+it('never backfills missing gaze, note-taking or a confirmed study recovery', () => {
+  for (const boundary of ['unknown', null] as const) {
+    const gate = new ScreenIntervention(), scene = pendingScene(1);
+    for (let ms = 0; ms < 20_000; ms += 100) gate.update({ scene, goalRequired: true }, ms);
+    for (let ms = 20_000; ms < 30_000; ms += 100) gate.update(boundary, ms);
+    Object.assign(scene, { status: 'ready', label: 'off-topic' });
+    expect(gate.update({ scene, goalRequired: true }, 30_000)).toMatchObject({ play: false, durationMs: 0 });
+  }
+});
+
+it('does not trigger on related, uncertain or failed classifications after waiting', () => {
+  for (const label of ['related', 'uncertain', 'unavailable'] as const) {
+    const gate = new ScreenIntervention(), scene = pendingScene(1);
+    for (let ms = 0; ms < 35_000; ms += 100) gate.update({ scene, goalRequired: true }, ms);
+    Object.assign(scene, { status: 'ready', label });
+    expect(gate.update({ scene, goalRequired: true }, 35_000).play).toBe(false);
+  }
 });

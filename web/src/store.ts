@@ -8,6 +8,7 @@ import { load, save, uid } from './lib/storage';
 export type Screen = 'desk' | 'setup' | 'study' | 'report';
 export type ScreenReading = 'idle' | 'waiting' | 'reading' | 'ready' | 'no-text' | 'on-lockin' | 'paused' | 'stopped' | 'error';
 export type Theme = 'system' | 'light' | 'dark';
+export type RecoveryWait = 'tracking' | 'study-window' | 'reading' | 'off-topic' | 'look-at-screen' | 'notes';
 
 export interface Live {
   recapPreparation?: 'preparing' | 'ready' | 'unavailable';
@@ -21,6 +22,8 @@ export interface Live {
   gazeTracking?: GazeTracking;
   /** 0–1 progress toward "refocused" while recovering */
   recoverProgress: number;
+  recoveryWait?: RecoveryWait;
+  screenDwellMs?: number;
   cooldownUntil: number;
   noteTakingUntil: number | null;
   startedAt: number;

@@ -127,11 +127,16 @@ export class GazeCapture {
         this.fail('The gaze model is not responding. Stop and restart tracking. If the problem persists, share the model diagnostics.');return;
       }
       const pollGap=this.lastPollAt===null?Infinity:t-this.lastPollAt;this.lastPollAt=t;
-      const count=this.hasFrameCallbacks?null:this.video.getVideoPlaybackQuality?.().totalVideoFrames;
+      // Presentation callbacks can stop in an occluded/background tab while the
+      // camera still decodes frames. Poll a real decoded-frame counter even when
+      // requestVideoFrameCallback exists; never substitute video.currentTime.
+      const count=this.video.webkitDecodedFrameCount??this.video.getVideoPlaybackQuality?.().totalVideoFrames;
       // Observe counter changes even while loading/busy. Their first observation,
       // not the eventual inference submission, bounds fallback frame freshness.
       if(Number.isFinite(count)&&count>0&&(!this.observedFrame||count>this.observedFrame.id))this.observedFrame={id:count,at:t,fresh:pollGap>=0&&pollGap<1200};
-      const frame=this.hasFrameCallbacks?this.presentedFrame:(this.observedFrame?.fresh?this.observedFrame:null);
+      const frame=Number.isFinite(count)&&count>0
+        ? (this.observedFrame?.fresh?this.observedFrame:null)
+        : this.presentedFrame;
       if(!this.ready||this.busy||t-this.lastFrame<100||!frame||(this.lastFrameId!==null&&frame.id<=this.lastFrameId)||t-frame.at>=1200)return;
       const {width,height}=this.canvas;
       this.lastFrame=t;this.lastFrameId=frame.id;this.busy=true;this.inferenceStartedAt=t;this.ctx.drawImage(this.video,0,0,width,height);const image=this.ctx.getImageData(0,0,width,height);

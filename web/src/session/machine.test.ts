@@ -21,6 +21,23 @@ function started(now = 0) {
 }
 
 describe('session state machine', () => {
+  it('requires fresh continuous recovery after a gap instead of advancing a frozen progress bar', () => {
+    let m = dispatch(started(), { type: 'requestRescue' }, 100).m;
+    m = dispatch(m, { type: 'rescueStarted' }, 200).m;
+    m = dispatch(m, { type: 'rescueFinished', clipMs: 1000 }, 1200).m;
+    m.lastTrigger = 'gaze';
+    m = run(m, 1300, 3300, { ...focused, offscreenRule: true }).m;
+    expect(m.aboveSince).toBe(1300);
+    m = run(m, 3400, 10_000, { ...focused, score: null, offscreenRule: true }).m;
+    expect(m.state).toBe('recovering');
+    expect(m.aboveSince).toBeNull();
+    m = step(m, { ...focused, now: 10_050, noteTaking: true, offscreenRule: true }).m;
+    expect(m.aboveSince).toBeNull();
+    m = run(m, 10_100, 14_000, { ...focused, offscreenRule: true }).m;
+    expect(m.state).toBe('recovering');
+    m = step(m, { ...focused, now: 14_100, offscreenRule: true }).m;
+    expect(m.state).toBe('focused');
+  });
   it('stays focused while the score is high', () => {
     const { m, events } = run(started(), 0, 30_000, focused);
     expect(m.state).toBe('focused');

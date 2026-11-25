@@ -9,6 +9,8 @@ const MAX_WAITING_FRAMES = 4;
 export class ScreenProcessor {
   private queue: Job[] = [];
   private running?: Promise<void>;
+  private labels: ScreenScene[] = [];
+  private classifying?: Promise<void>;
   private controller = new AbortController();
   private sealed = false;
 
@@ -30,13 +32,40 @@ export class ScreenProcessor {
 
   private pump() {
     if (this.running || !this.queue.length) return;
-    const current = this.queue.findIndex(job => job.scene === this.timeline.current
-      && job.scene.observedUntil - job.scene.timestamp >= 1500);
+    const current = this.queue.findIndex(job => job.scene === this.timeline.current);
     const index = this.sealed ? this.queue.reduce((best, job, i, jobs) =>
       job.scene.observedUntil - job.scene.timestamp > jobs[best].scene.observedUntil - jobs[best].scene.timestamp ? i : best, 0)
       : Math.max(0, current);
     const [job] = this.queue.splice(index, 1);
     this.running = this.process(job).finally(() => { this.running = undefined; this.pump(); });
+  }
+
+  private classifyNext() {
+    if (this.classifying || !this.labels.length) return;
+    const current = this.labels.indexOf(this.timeline.current!);
+    const [scene] = this.labels.splice(Math.max(0, current), 1);
+    this.classifying = this.classify(scene).finally(() => { this.classifying = undefined; this.classifyNext(); });
+  }
+
+  private async classify(scene: ScreenScene) {
+    scene.classificationStartedAt = Date.now();
+    const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(35_000)]);
+    try {
+      const response = await fetch('/v1/web-screen/activity', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ goal: this.timeline.goal, text: scene.text }), signal,
+      });
+      const result = response.ok ? await response.json() : {};
+      signal.throwIfAborted();
+      scene.label = ['related', 'off-topic', 'uncertain'].includes(result.label) ? result.label : 'unavailable';
+      scene.studyText = typeof result.studyText === 'string' ? result.studyText : undefined;
+      scene.classification = { reason: result.reason, rawDecision: result.rawDecision, evidence: result.evidence };
+    } catch (error) {
+      scene.label = 'unavailable';
+      scene.message = error instanceof Error ? error.message : 'Screen classification failed.';
+    }
+    scene.classifiedAt = Date.now();
+    this.publish(scene);
   }
 
   private async process({ scene, frame }: Job) {
@@ -65,15 +94,16 @@ export class ScreenProcessor {
       if (scene.status === 'no-text') scene.label = this.timeline.goal ? 'uncertain' : null;
       this.publish(scene);
       if (scene.status === 'ready' && this.timeline.goal) {
-        const response = await fetch('/v1/web-screen/activity', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ goal: this.timeline.goal, text: scene.text }), signal,
-        });
-        const result = response.ok ? await response.json() : {};
-        scene.label = ['related', 'off-topic', 'uncertain'].includes(result.label) ? result.label : 'unavailable';
-        scene.studyText = typeof result.studyText === 'string' ? result.studyText : undefined;
-        scene.classification = { reason: result.reason, rawDecision: result.rawDecision, evidence: result.evidence };
-        scene.classifiedAt = Date.now();
+        // One OCR request and one classifier request may run concurrently.
+        // A slow historical classification must not hold up the current screenshot.
+        if (this.labels.length >= MAX_WAITING_FRAMES) {
+          const [dropped] = this.labels.splice(0, 1);
+          dropped.label = 'unavailable';
+          dropped.message = 'Classification queue retained the newest screens.';
+          this.publish(dropped);
+        }
+        this.labels.push(scene);
+        this.classifyNext();
       }
     } catch (error) {
       scene.label = 'unavailable';
@@ -87,12 +117,12 @@ export class ScreenProcessor {
   async finish(timeoutMs = 90_000) {
     this.sealed = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const drain = async () => { while (this.running) await this.running; };
+    const drain = async () => { while (this.running || this.classifying) await Promise.all([this.running, this.classifying]); };
     await Promise.race([drain(), new Promise<void>(resolve => {
       timer = setTimeout(() => { this.cancel(); resolve(); }, timeoutMs);
     })]);
     clearTimeout(timer);
-    if (this.running) await this.running;
+    await Promise.all([this.running, this.classifying]);
   }
 
   cancel() {
@@ -100,5 +130,7 @@ export class ScreenProcessor {
     this.controller.abort();
     for (const { scene } of this.queue) { scene.status = 'skipped'; scene.label = 'unavailable'; scene.message = 'Session analysis deadline reached.'; }
     this.queue = [];
+    for (const scene of this.labels) { scene.label = 'unavailable'; scene.message = 'Session analysis deadline reached.'; this.publish(scene); }
+    this.labels = [];
   }
 }

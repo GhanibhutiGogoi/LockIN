@@ -14,6 +14,7 @@ interface Observation { sample: FocusSample; excluded: boolean }
 export class ScreenTimeline {
   scenes: ScreenScene[] = [];
   events: ScreenAnalysis['events'] = [];
+  controlSamples: NonNullable<ScreenAnalysis['controlSamples']> = [];
   private gaze: Observation[] = [];
   private serial = 0;
   private droppedGazeSamples = 0;
@@ -133,7 +134,7 @@ export class ScreenTimeline {
       }
     }
     const analysis: ScreenAnalysis = { version: 1, windowMs: 5000, timestampUnit: 'unix-ms', scenes: this.scenes.map(s => ({ ...s })),
-      measurements, windows, events: [...this.events], droppedGazeSamples: this.droppedGazeSamples, droppedScenes: this.droppedScenes };
+      measurements, windows, events: [...this.events], controlSamples: [...this.controlSamples], droppedGazeSamples: this.droppedGazeSamples, droppedScenes: this.droppedScenes };
     analysis.summary = summarizeScreenAnalysis(analysis);
     return analysis;
   }
